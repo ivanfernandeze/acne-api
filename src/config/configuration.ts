@@ -130,7 +130,13 @@ export function loadConfiguration(): AppConfig {
     nodeEnv: envString('NODE_ENV', 'development'),
     port: envNumber('API_PORT', 3001),
     globalPrefix: envString('API_GLOBAL_PREFIX', 'api'),
-    corsOrigins: envString('CORS_ORIGINS', 'http://localhost:3000')
+    // `localhost` and `127.0.0.1` are different origins to a browser, and developers use them
+    // interchangeably. Allowing only one turns a trivial URL choice into a confusing
+    // "cannot contact the API" error with no CORS message in sight.
+    corsOrigins: envString(
+      'CORS_ORIGINS',
+      'http://localhost:3000,http://127.0.0.1:3000,http://localhost:3002,http://127.0.0.1:3002',
+    )
       .split(',')
       .map((o) => o.trim())
       .filter(Boolean),

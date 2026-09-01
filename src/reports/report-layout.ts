@@ -40,7 +40,9 @@ const PRINT_STYLES = `
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .cards { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
   .card { flex: 1 1 180px; border: 1px solid #cbd5e0; border-radius: 6px; padding: 10px 12px; }
-  .card .label { font-size: 8pt; text-transform: uppercase; letter-spacing: 0.5px; color: #4a5568; }
+  /* Deliberately NOT uppercased: text-transform would turn the alpha of "a = 0,05" into a Latin
+     letter A, and these labels carry statistical notation, not decoration. */
+  .card .label { font-size: 8pt; font-weight: 600; letter-spacing: 0.4px; color: #4a5568; }
   .card .value { font-size: 18pt; font-weight: 700; color: #0f2f4f; font-variant-numeric: tabular-nums; }
   .card .unit { font-size: 9pt; color: #4a5568; font-weight: 400; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 8pt; font-weight: 600; }
