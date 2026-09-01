@@ -36,22 +36,54 @@ export class CasesController {
       'Es la bandeja de trabajo real: primero la pasada de pretest sobre los 30 casos, después ' +
       'la de postest sobre esos mismos 30.',
   })
-  @ApiOperation({ summary: 'Bandeja de casos con filtro por modo de estudio (Sección 9.3).' })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    description: 'Busca por código de caso, código de paciente o nombre del paciente.',
+  })
+  @ApiOperation({
+    summary: 'Bandeja de casos con filtro por modo de estudio (Sección 9.3).',
+    description:
+      'Para `dermatologo` y `residente` cada caso incluye `patientName` descifrado, de modo que ' +
+      'la bandeja se pueda leer por nombre y no solo por código (RF-TR-03). Para el resto de ' +
+      'roles llega en `null`.',
+  })
   async findAll(
     @CurrentUser() user: AuthenticatedUser,
+    @Req() request: AuthenticatedRequest,
     @Query('studyMode') studyMode?: StudyMode,
     @Query('status') status?: CaseStatus,
     @Query('mine') mine?: string,
     @Query('includeSynthetic') includeSynthetic?: string,
     @Query('pending') pending?: string,
+    @Query('search') search?: string,
   ): Promise<CaseSummaryDto[]> {
-    return this.casesService.findAll({
+    const maySeeIdentity = user.role === 'dermatologo' || user.role === 'residente';
+
+    const cases = await this.casesService.findAll({
       studyMode,
       status,
       assignedUserId: mine === 'true' ? user.id : undefined,
       includeSynthetic: includeSynthetic === 'true',
       pendingForMode: pending === 'true' ? user.studyMode : undefined,
+      revealIdentity: maySeeIdentity,
+      search,
     });
+
+    if (maySeeIdentity) {
+      // One entry per listing, not per case: a per-row log would bury the targeted
+      // `patient.identity.read` events under the noise of every tray refresh.
+      await this.auditService.record(
+        user,
+        {
+          action: 'case.list.identity',
+          entityType: 'case',
+          metadata: { count: cases.length, search: search ?? null },
+        },
+        request,
+      );
+    }
+    return cases;
   }
 
   @Post()

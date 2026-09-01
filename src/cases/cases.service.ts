@@ -2,6 +2,7 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
+import { EncryptionService } from 'src/common/crypto/encryption.service';
 import { canTransition, type CaseStatus, type StudyMode } from 'src/common/domain';
 import type { AuthenticatedUser } from 'src/common/interfaces/authenticated-user';
 import { APP_CONFIG, type AppConfig } from 'src/config/configuration';
@@ -25,6 +26,13 @@ export interface CaseFilters {
   assignedUserId?: string;
   includeSynthetic?: boolean;
   /**
+   * Decrypts the patient's name into the response. Only for `dermatologo`/`residente`; the caller
+   * is responsible for the audit entry (RF-TR-03, RNF-02).
+   */
+  revealIdentity?: boolean;
+  /** Free text over case code, patient code and — when revealed — the patient's name. */
+  search?: string;
+  /**
    * Filters to the cases still awaiting a measurement under this condition — the working tray of
    * a physician doing the pretest pass, or later the postest pass, over the same 30 cases.
    */
@@ -40,6 +48,7 @@ export class CasesService {
     private readonly inferenceService: InferenceService,
     private readonly reviewTiming: ReviewTimingService,
     private readonly diagnosesService: DiagnosesService,
+    private readonly encryption: EncryptionService,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
 
@@ -89,16 +98,44 @@ export class CasesService {
       );
     }
 
+    if (filters.revealIdentity === true) query.addSelect('patient.encryptedFullName');
+
     const cases = await query.getMany();
     const counts = await this.imageCounts(cases.map((c) => c.id));
-    return cases.map((c) => this.toSummary(c, counts.get(c.id) ?? 0));
+
+    const summaries = cases.map((c) =>
+      this.toSummary(
+        c,
+        counts.get(c.id) ?? 0,
+        filters.revealIdentity === true
+          ? this.encryption.decryptOptional(c.patient?.encryptedFullName)
+          : null,
+      ),
+    );
+
+    // Filtering happens after decryption because the name is ciphertext in the database and no
+    // SQL predicate can reach it. Acceptable for a census of 30 cases; a production registry
+    // would need a blind index.
+    const term = filters.search?.trim().toLowerCase() ?? '';
+    if (term === '') return summaries;
+
+    return summaries.filter(
+      (summary) =>
+        summary.caseCode.toLowerCase().includes(term) ||
+        summary.patientCode.toLowerCase().includes(term) ||
+        (summary.patientName ?? '').toLowerCase().includes(term),
+    );
   }
 
-  async findEntity(id: string): Promise<ClinicalCase> {
-    const found = await this.repository.findOne({
-      where: { id },
-      relations: { patient: true, assignedUser: true },
-    });
+  async findEntity(id: string, revealIdentity = false): Promise<ClinicalCase> {
+    const query = this.repository
+      .createQueryBuilder('c')
+      .leftJoinAndSelect('c.patient', 'patient')
+      .leftJoinAndSelect('c.assignedUser', 'assignedUser')
+      .where('c.id = :id', { id });
+    if (revealIdentity) query.addSelect('patient.encryptedFullName');
+
+    const found = await query.getOne();
     if (found === null) throw new NotFoundException(`No existe el caso ${id}.`);
     return found;
   }
@@ -111,7 +148,8 @@ export class CasesService {
    * physician must not even glimpse the suggestion while O₁ is being measured (RF-TR-01).
    */
   async findOne(id: string, user: AuthenticatedUser): Promise<CaseDetailDto> {
-    const clinicalCase = await this.findEntity(id);
+    const maySeeIdentity = user.role === 'dermatologo' || user.role === 'residente';
+    const clinicalCase = await this.findEntity(id, maySeeIdentity);
     // Visibility depends on the REQUESTER's condition, not on the case: the same case is reviewed
     // in both conditions, and what must stay hidden is the suggestion during the pretest pass.
     const aiVisible = user.studyMode !== 'pretest';
@@ -126,7 +164,13 @@ export class CasesService {
     const apiPrefix = `/${this.config.globalPrefix}`;
 
     return {
-      ...this.toSummary(clinicalCase, images.filter((i) => !i.isHeatmap).length),
+      ...this.toSummary(
+        clinicalCase,
+        images.filter((i) => !i.isHeatmap).length,
+        maySeeIdentity
+          ? this.encryption.decryptOptional(clinicalCase.patient?.encryptedFullName)
+          : null,
+      ),
       images: images.map((image) => this.imagesService.toDto(image, apiPrefix, user.id)),
       inference: inference === null ? null : this.inferenceService.toDto(inference),
       diagnoses: diagnoses.map((d) =>
@@ -191,12 +235,17 @@ export class CasesService {
     }
   }
 
-  toSummary(clinicalCase: ClinicalCase, imageCount = 0): CaseSummaryDto {
+  toSummary(
+    clinicalCase: ClinicalCase,
+    imageCount = 0,
+    patientName: string | null = null,
+  ): CaseSummaryDto {
     return {
       id: clinicalCase.id,
       caseCode: clinicalCase.caseCode,
       patientId: clinicalCase.patientId,
       patientCode: clinicalCase.patient?.patientCode ?? '',
+      patientName,
       assignedUserId: clinicalCase.assignedUserId,
       assignedUserName: clinicalCase.assignedUser?.fullName ?? null,
       studyMode: clinicalCase.studyMode,

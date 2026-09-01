@@ -68,6 +68,15 @@ export class CaseSummaryDto {
   @ApiProperty() caseCode: string;
   @ApiProperty() patientId: string;
   @ApiProperty() patientCode: string;
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description:
+      'Nombre del paciente, descifrado solo para `dermatologo` y `residente` (RF-TR-03). ' +
+      'Para el resto de roles llega en `null`; los anexos, exportaciones y reportes usan siempre ' +
+      'el código, nunca el nombre.',
+  })
+  patientName: string | null;
   @ApiProperty({ nullable: true, type: String }) assignedUserId: string | null;
   @ApiProperty({ nullable: true, type: String }) assignedUserName: string | null;
   @ApiProperty({ enum: STUDY_MODES }) studyMode: StudyMode;

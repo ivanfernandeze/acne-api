@@ -60,6 +60,14 @@ export class PatientResponseDto {
   @ApiProperty() id: string;
   @ApiProperty({ description: 'Identificador anonimizado, p. ej. PAC-2026-0001.' })
   patientCode: string;
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description:
+      'Nombre descifrado. Solo se rellena para `dermatologo` y `residente`; para el resto de ' +
+      'roles llega en `null`, de modo que la anonimización de RF-TR-03 se mantiene.',
+  })
+  fullName: string | null;
   @ApiProperty({ nullable: true, type: String }) birthDate: string | null;
   @ApiProperty({ nullable: true, type: Number }) ageYears: number | null;
   @ApiProperty({ nullable: true, enum: SEXES }) sex: Sex | null;

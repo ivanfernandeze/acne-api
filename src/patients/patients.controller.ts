@@ -24,9 +24,47 @@ export class PatientsController {
 
   @Get()
   @ApiQuery({ name: 'includeWithdrawn', required: false, type: Boolean })
-  @ApiOperation({ summary: 'Lista pacientes anonimizados.' })
-  async findAll(@Query('includeWithdrawn') includeWithdrawn?: string): Promise<PatientResponseDto[]> {
-    return this.patientsService.findAll(includeWithdrawn === 'true');
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    description: 'Filtra por nombre o por código. Solo surte efecto para roles asistenciales.',
+  })
+  @ApiOperation({
+    summary: 'Lista pacientes.',
+    description:
+      'Para `dermatologo` y `residente` incluye el nombre descifrado, porque elegir un paciente ' +
+      'de una lista de códigos es como se abre el caso equivocado (RF-TR-03 reserva la identidad ' +
+      'al profesional tratante, no le pide trabajar a ciegas). Para los demás roles `fullName` ' +
+      'llega en `null`. El acceso en bloque queda registrado en la traza de auditoría (RNF-02).',
+  })
+  async findAll(
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: AuthenticatedRequest,
+    @Query('includeWithdrawn') includeWithdrawn?: string,
+    @Query('search') search?: string,
+  ): Promise<PatientResponseDto[]> {
+    const maySeeIdentity = user.role === 'dermatologo' || user.role === 'residente';
+    if (!maySeeIdentity) {
+      return this.patientsService.findAll(includeWithdrawn === 'true');
+    }
+
+    const patients = await this.patientsService.findAllWithIdentity({
+      includeWithdrawn: includeWithdrawn === 'true',
+      search,
+    });
+
+    // One entry for the whole listing rather than one per patient: a per-row log would bury the
+    // targeted `patient.identity.read` events that actually matter under hundreds of list hits.
+    await this.auditService.record(
+      user,
+      {
+        action: 'patient.list.identity',
+        entityType: 'patient',
+        metadata: { count: patients.length, search: search ?? null },
+      },
+      request,
+    );
+    return patients;
   }
 
   @Post()

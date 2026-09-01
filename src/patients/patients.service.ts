@@ -61,6 +61,45 @@ export class PatientsService {
     return patients.map((p) => this.toResponse(p));
   }
 
+  /**
+   * Patient list including the decrypted name, for the professionals who are allowed to see it.
+   *
+   * RF-TR-03 keeps the identity encrypted and reserves it for the treating clinician; it does not
+   * ask the clinician to work blind. Choosing a patient from a list of `PAC-2026-0007` codes is
+   * how the wrong case gets opened, so the name is shown to `dermatologo`/`residente` only, and
+   * the CALLER must audit the access.
+   *
+   * Search happens in memory after decryption: the name is ciphertext in the database, so no SQL
+   * `LIKE` can reach it. That is fine for the census of 30 patients this study works with; a
+   * production registry would need a blind index instead.
+   */
+  async findAllWithIdentity(options: {
+    includeWithdrawn?: boolean;
+    search?: string;
+  }): Promise<PatientResponseDto[]> {
+    const query = this.repository
+      .createQueryBuilder('patient')
+      .addSelect('patient.encryptedFullName')
+      .orderBy('patient.patientCode', 'ASC');
+    if (options.includeWithdrawn !== true) query.where('patient.withdrawnAt IS NULL');
+
+    const patients = await query.getMany();
+    const term = options.search?.trim().toLowerCase() ?? '';
+
+    return patients
+      .map((patient) => ({
+        ...this.toResponse(patient),
+        fullName: this.encryption.decryptOptional(patient.encryptedFullName),
+      }))
+      .filter((patient) => {
+        if (term === '') return true;
+        return (
+          patient.patientCode.toLowerCase().includes(term) ||
+          (patient.fullName ?? '').toLowerCase().includes(term)
+        );
+      });
+  }
+
   async findById(id: string): Promise<Patient> {
     const patient = await this.repository.findOne({ where: { id } });
     if (patient === null) throw new NotFoundException(`No existe el paciente ${id}.`);
@@ -112,6 +151,8 @@ export class PatientsService {
     return {
       id: patient.id,
       patientCode: patient.patientCode,
+      // Withheld by default; `findAllWithIdentity` fills it in for authorised roles.
+      fullName: null,
       birthDate: patient.birthDate,
       ageYears: this.ageFromBirthDate(patient.birthDate),
       sex: patient.sex,

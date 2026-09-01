@@ -35,6 +35,22 @@ versionado con [SemVer](https://semver.org/lang/es/).
 - **Seeds** — `seed:admin` (cuentas con contraseñas aleatorias de un solo uso) y `seed:study`
   (30 casos sintéticos reproducibles con imágenes PNG cifradas y Grad-CAM simulado).
 
+### Changed
+
+- **Nombre del paciente visible para el profesional tratante, y búsqueda por nombre.**
+  `GET /patients` y `GET /cases` devuelven `fullName` / `patientName` descifrado cuando el
+  solicitante es `dermatologo` o `residente`, y `null` para el resto de roles. Ambos aceptan
+  `search`, que filtra por nombre, código de paciente o código de caso.
+  RF-TR-03 cifra la identidad y la reserva al profesional tratante; no le pide elegir entre
+  códigos, que es justamente como se abre el caso equivocado. La anonimización se mantiene donde
+  importa: **anexos, exportación CSV y reportes PDF siguen usando solo códigos**, verificado.
+  El filtrado ocurre en memoria tras descifrar, porque el nombre es ciphertext y ningún `LIKE` de
+  SQL lo alcanza; es suficiente para el censo de 30 casos, pero un registro en producción
+  necesitaría un índice ciego.
+- Los listados con identidad registran **una** entrada de auditoría por consulta
+  (`patient.list.identity`, `case.list.identity`) en lugar de una por fila, para no sepultar los
+  eventos puntuales de `patient.identity.read` bajo el ruido de cada refresco.
+
 ### Fixed
 
 - **Cola de inferencia: trabajos fantasma.** `claimNext` interpretaba mal el resultado de
