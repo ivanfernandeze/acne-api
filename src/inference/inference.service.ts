@@ -2,7 +2,6 @@ import { Inject, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModul
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 
-import type { GagsGrade, IgaClass } from 'src/common/domain';
 import { APP_CONFIG, type AppConfig } from 'src/config/configuration';
 import { ImagesService } from 'src/images/images.service';
 

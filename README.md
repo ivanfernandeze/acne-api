@@ -96,7 +96,7 @@ Tres repositorios independientes que se comunican solo por contratos OpenAPI:
 common/domain/   Fuente única de verdad: IGA, GAGS, indicadores, hipótesis, Likert, disclaimer
 common/crypto/   AES-256-GCM y tokens firmados (RNF-02)
 auth/ users/     JWT + 4 roles + modo de estudio (RF-TR-01, RF-TR-02)
-patients/        Anonimización y consentimiento (RF-TR-03, RNF-07)
+patients/        Anonimización, consentimiento e historia longitudinal (RF-TR-03, RNF-07)
 cases/ images/   Casos, apertura cronometrada, imágenes cifradas
 study/           Guard de la variable independiente y Anexo 4
 inference/       Cliente del motor + cola con reintentos

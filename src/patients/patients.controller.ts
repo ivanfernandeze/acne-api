@@ -9,7 +9,9 @@ import type {
 } from 'src/common/interfaces/authenticated-user';
 
 import type { Consent } from './consent.entity';
+import { PatientHistoryDto } from './dto/patient-history.dto';
 import { CreatePatientDto, PatientIdentityDto, PatientResponseDto } from './dto/patient.dto';
+import { PatientHistoryService } from './patient-history.service';
 import { PatientsService } from './patients.service';
 
 /** Covers: RF-TR-03, RNF-02, RNF-07. */
@@ -19,6 +21,7 @@ import { PatientsService } from './patients.service';
 export class PatientsController {
   constructor(
     private readonly patientsService: PatientsService,
+    private readonly patientHistoryService: PatientHistoryService,
     private readonly auditService: AuditService,
   ) {}
 
@@ -96,9 +99,51 @@ export class PatientsController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Devuelve un paciente anonimizado.' })
-  async findOne(@Param('id', ParseUUIDPipe) id: string): Promise<PatientResponseDto> {
-    return this.patientsService.toResponse(await this.patientsService.findById(id));
+  @ApiOperation({ summary: 'Devuelve un paciente.' })
+  async findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<PatientResponseDto> {
+    return this.patientsService.findResponseById(id, this.maySeeIdentity(user));
+  }
+
+  @Get(':id/history')
+  @Roles('dermatologo', 'residente', 'admin', 'evaluador_estadistico')
+  @ApiQuery({ name: 'includeSynthetic', required: false, type: Boolean })
+  @ApiOperation({
+    summary: 'Historia clínica longitudinal del paciente.',
+    description:
+      'Cronología de visitas con la severidad IGA de cada una, los diagnósticos emitidos, los ' +
+      'tiempos de revisión y las imágenes, más un resumen de evolución. Es la vista CLÍNICA: la ' +
+      'bandeja de casos se organiza en torno al experimento, esta responde a lo que el ' +
+      'dermatólogo pregunta en un control — cómo ha evolucionado este paciente. El bloque de IA ' +
+      'llega en `null` cuando el solicitante opera en pretest (RF-TR-01).',
+  })
+  async history(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: AuthenticatedRequest,
+    @Query('includeSynthetic') includeSynthetic?: string,
+  ): Promise<PatientHistoryDto> {
+    const reveal = this.maySeeIdentity(user);
+    const patient = await this.patientsService.findResponseById(id, reveal);
+    const history = await this.patientHistoryService.build(
+      patient,
+      user,
+      includeSynthetic === 'true',
+    );
+
+    await this.auditService.record(
+      user,
+      {
+        action: 'patient.history.read',
+        entityType: 'patient',
+        entityId: id,
+        metadata: { cases: history.summary.totalCases, withIdentity: reveal },
+      },
+      request,
+    );
+    return history;
   }
 
   @Get(':id/identity')
@@ -145,6 +190,11 @@ export class PatientsController {
   @ApiOperation({ summary: 'Historial de consentimientos del paciente (RNF-07).' })
   async consents(@Param('id', ParseUUIDPipe) id: string): Promise<Consent[]> {
     return this.patientsService.findConsents(id);
+  }
+
+  /** RF-TR-03: only the clinicians who treat the patient may see the decrypted identity. */
+  private maySeeIdentity(user: AuthenticatedUser): boolean {
+    return user.role === 'dermatologo' || user.role === 'residente';
   }
 
   private resolveIp(request: AuthenticatedRequest): string | null {

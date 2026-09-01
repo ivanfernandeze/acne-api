@@ -2,7 +2,6 @@ import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 
-import { ClinicalCase } from 'src/cases/case.entity';
 import {
   LIKERT_ITEMS,
   LIKERT_MAX_SCORE,

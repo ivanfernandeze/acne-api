@@ -169,7 +169,7 @@ export class CasesController {
     @CurrentUser() user: AuthenticatedUser,
     @Req() request: AuthenticatedRequest,
   ): Promise<CaseSummaryDto> {
-    const closed = await this.casesService.close(id, user);
+    const closed = await this.casesService.close(id);
     await this.auditService.record(
       user,
       { action: 'case.close', entityType: 'case', entityId: id },

@@ -10,8 +10,10 @@ import {
 
 import {
   FITZPATRICK_TYPES,
+  IGA_CLASSES,
   SEXES,
   type FitzpatrickType,
+  type IgaClass,
   type Sex,
 } from 'src/common/domain';
 
@@ -76,6 +78,17 @@ export class PatientResponseDto {
   @ApiProperty({ nullable: true, type: String }) consentAcceptedAt: string | null;
   @ApiProperty({ nullable: true, type: String }) withdrawnAt: string | null;
   @ApiProperty() createdAt: string;
+
+  // --- Longitudinal summary, for the patient list -----------------------------
+  @ApiProperty({ description: 'Número de casos clínicos registrados para este paciente.' })
+  caseCount: number;
+  @ApiProperty({ nullable: true, type: String }) lastVisitAt: string | null;
+  @ApiProperty({
+    nullable: true,
+    enum: IGA_CLASSES,
+    description: 'Severidad más reciente según el juicio del especialista.',
+  })
+  lastSeverity: IgaClass | null;
 }
 
 /** Returned only to the treating dermatologist, and every read is audited (RF-TR-03, RNF-02). */

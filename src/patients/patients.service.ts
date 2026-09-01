@@ -3,11 +3,17 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 
 import { EncryptionService } from 'src/common/crypto/encryption.service';
-import { CONSENT_CURRENT_VERSION } from 'src/common/domain';
+import { CONSENT_CURRENT_VERSION, type IgaClass } from 'src/common/domain';
 
 import { Consent } from './consent.entity';
 import type { CreatePatientDto, PatientIdentityDto, PatientResponseDto } from './dto/patient.dto';
 import { Patient } from './patient.entity';
+
+interface PatientSummaryFields {
+  caseCount: number;
+  lastVisitAt: string | null;
+  lastSeverity: IgaClass | null;
+}
 
 /** Covers: RF-TR-03 (anonymisation) and RNF-07 (consent, right to withdraw). */
 @Injectable()
@@ -57,8 +63,25 @@ export class PatientsService {
   async findAll(includeWithdrawn = false): Promise<PatientResponseDto[]> {
     const query = this.repository.createQueryBuilder('patient').orderBy('patient.patientCode', 'ASC');
     if (!includeWithdrawn) query.where('patient.withdrawnAt IS NULL');
-    const patients = await query.getMany();
-    return patients.map((p) => this.toResponse(p));
+
+    const [patients, summaries] = await Promise.all([query.getMany(), this.summaries(true)]);
+    return patients.map((p) => ({ ...this.toResponse(p), ...(summaries.get(p.id) ?? {}) }));
+  }
+
+  /** Single patient as a response DTO, optionally with the decrypted name and the summary. */
+  async findResponseById(id: string, revealIdentity: boolean): Promise<PatientResponseDto> {
+    const query = this.repository.createQueryBuilder('patient').where('patient.id = :id', { id });
+    if (revealIdentity) query.addSelect('patient.encryptedFullName');
+
+    const patient = await query.getOne();
+    if (patient === null) throw new NotFoundException(`No existe el paciente ${id}.`);
+
+    const summaries = await this.summaries(true);
+    return {
+      ...this.toResponse(patient),
+      ...(summaries.get(patient.id) ?? {}),
+      fullName: revealIdentity ? this.encryption.decryptOptional(patient.encryptedFullName) : null,
+    };
   }
 
   /**
@@ -83,12 +106,16 @@ export class PatientsService {
       .orderBy('patient.patientCode', 'ASC');
     if (options.includeWithdrawn !== true) query.where('patient.withdrawnAt IS NULL');
 
-    const patients = await query.getMany();
+    const [patients, summaries] = await Promise.all([
+      query.getMany(),
+      this.summaries(true),
+    ]);
     const term = options.search?.trim().toLowerCase() ?? '';
 
     return patients
       .map((patient) => ({
         ...this.toResponse(patient),
+        ...(summaries.get(patient.id) ?? {}),
         fullName: this.encryption.decryptOptional(patient.encryptedFullName),
       }))
       .filter((patient) => {
@@ -160,7 +187,51 @@ export class PatientsService {
       consentAcceptedAt: patient.consentAcceptedAt?.toISOString() ?? null,
       withdrawnAt: patient.withdrawnAt?.toISOString() ?? null,
       createdAt: patient.createdAt.toISOString(),
+      // Filled in by the list endpoints; a single patient fetch leaves the summary empty.
+      caseCount: 0,
+      lastVisitAt: null,
+      lastSeverity: null,
     };
+  }
+
+  /**
+   * Per-patient longitudinal summary for the patient list: how many cases, when the last visit
+   * was, and the severity recorded at it. Answers "who needs a follow-up" at a glance, which a
+   * list of codes and dates cannot.
+   */
+  private async summaries(
+    includeSynthetic: boolean,
+  ): Promise<Map<string, PatientSummaryFields>> {
+    const rows = await this.dataSource.query<
+      Array<{ patientId: string; caseCount: string; lastVisitAt: string | null; lastSeverity: string | null }>
+    >(
+      `SELECT c."patient_id"        AS "patientId",
+              COUNT(*)              AS "caseCount",
+              MAX(c."created_at")   AS "lastVisitAt",
+              (SELECT d."iga_class"
+                 FROM "diagnoses" d
+                 JOIN "cases" c2 ON c2."id" = d."case_id"
+                WHERE c2."patient_id" = c."patient_id"
+                ORDER BY d."created_at" DESC
+                LIMIT 1)            AS "lastSeverity"
+         FROM "cases" c
+        WHERE ($1::boolean OR c."is_synthetic" = false)
+        GROUP BY c."patient_id"`,
+      [includeSynthetic],
+    );
+
+    return new Map(
+      rows.map((row) => [
+        row.patientId,
+        {
+          caseCount: Number(row.caseCount),
+          lastVisitAt: row.lastVisitAt === null ? null : new Date(row.lastVisitAt).toISOString(),
+          // The column is a varchar guarded by a CHECK constraint, so any value it can hold is
+          // a valid IGA class; the cast records that the guarantee lives in the schema.
+          lastSeverity: (row.lastSeverity as IgaClass | null) ?? null,
+        },
+      ]),
+    );
   }
 
   private ageFromBirthDate(birthDate: string | null): number | null {

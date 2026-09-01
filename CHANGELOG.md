@@ -37,6 +37,24 @@ versionado con [SemVer](https://semver.org/lang/es/).
 
 ### Changed
 
+- **Historia clínica longitudinal del paciente.** `GET /patients/:id/history` devuelve la
+  cronología completa de visitas de una persona —severidad IGA de cada una, diagnósticos firmados,
+  cronometrías de ambas condiciones, imágenes y sugerencia del modelo— más un resumen de evolución
+  (`trend`, `severityDelta`, `averageReviewMinutes`). Es la vista **clínica**, complementaria a la
+  bandeja de casos: la bandeja se organiza en torno al experimento y responde «qué falta revisar»,
+  esta responde lo que el dermatólogo pregunta en un control, «cómo ha evolucionado este paciente».
+  El bloque de IA llega en `null` para quien opera en pretest, igual que en la ficha de caso
+  (RF-TR-01), y cada consulta queda registrada como `patient.history.read`.
+  `GET /patients` incorpora además el resumen por paciente (`caseCount`, `lastVisitAt`,
+  `lastSeverity`) para poder triar el registro de un vistazo.
+- **La siembra sintética reparte los 30 casos entre ~21 pacientes.** Antes generaba un paciente por
+  caso, de modo que ninguna historia tenía seguimiento y la curva de evolución quedaba
+  estructuralmente vacía. El censo que fija la tesis es de 30 **casos**, no de 30 pacientes, así
+  que repartirlos es a la vez más realista y fiel al diseño: algunos pacientes acumulan dos o tres
+  visitas separadas ~45 días, con una trayectoria de severidad que suele mejorar un escalón IGA
+  bajo tratamiento. Las 30 unidades pareadas de HE₁, HE₂ y los indicadores no cambian.
+  Los nombres se sortean ahora dentro del sexo registrado; sorteados por separado producían filas
+  como «José … femenino», que se leen como un fallo de integridad en cuanto se muestra el registro.
 - **Nombre del paciente visible para el profesional tratante, y búsqueda por nombre.**
   `GET /patients` y `GET /cases` devuelven `fullName` / `patientName` descifrado cuando el
   solicitante es `dermatologo` o `residente`, y `null` para el resto de roles. Ambos aceptan

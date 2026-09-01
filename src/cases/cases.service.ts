@@ -207,7 +207,7 @@ export class CasesService {
     return this.findOne(id, user);
   }
 
-  async close(id: string, user: AuthenticatedUser): Promise<CaseSummaryDto> {
+  async close(id: string): Promise<CaseSummaryDto> {
     const clinicalCase = await this.findEntity(id);
     if (!canTransition(clinicalCase.status, 'closed')) {
       throw new BadRequestException(

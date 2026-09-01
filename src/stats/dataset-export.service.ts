@@ -158,7 +158,10 @@ export class DatasetExportService {
     if (value instanceof Date) return value.toISOString();
     if (typeof value === 'boolean') return value ? 'true' : 'false';
 
-    const text = String(value);
+    // A `jsonb` column (class_probs, audit metadata) arrives as an object; `String()` would write
+    // the literal "[object Object]" into the CSV the thesis analyses, silently losing the value.
+    const text =
+      typeof value === 'object' ? JSON.stringify(value) : (value as string | number).toString();
     return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
   }
 }

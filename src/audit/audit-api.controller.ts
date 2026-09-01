@@ -7,7 +7,7 @@ import { AiEngineClient } from 'src/inference/ai-engine.client';
 
 import { AuditLogDto, IiaCheckDto, ThesisCoverageDto } from './dto/audit.dto';
 import { AuditService } from './audit.service';
-import { COVERAGE_REGISTRY, type CoverageEntry, type CoverageStatus } from './thesis-coverage.registry';
+import { COVERAGE_REGISTRY, type CoverageEntry } from './thesis-coverage.registry';
 
 /**
  * Thesis traceability and verification of the independent variable.
@@ -55,7 +55,7 @@ export class AuditApiController {
       if (entry.objective === 'OE2') {
         return {
           ...entry,
-          status: 'partial' as CoverageStatus,
+          status: 'partial',
           notes:
             `${entry.notes ?? ''} La tubería está implementada y verificada, pero el motor opera ` +
             `con backend "${modelBackend}": falta sustituir el stub por pesos entrenados.`,
@@ -64,14 +64,14 @@ export class AuditApiController {
       if (entry.objective === 'OG') {
         return {
           ...entry,
-          status: 'partial' as CoverageStatus,
+          status: 'partial',
           notes: `${entry.notes ?? ''} Bloqueado por OE2.`,
         };
       }
       if (entry.objective === 'IIA') {
         return {
           ...entry,
-          status: 'partial' as CoverageStatus,
+          status: 'partial',
           notes: `${entry.notes ?? ''} /audit/iia-check reporta operational = false.`,
         };
       }
