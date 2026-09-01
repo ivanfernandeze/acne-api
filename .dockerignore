@@ -1,0 +1,11 @@
+node_modules
+dist
+coverage
+storage
+reports-output
+.env
+.env.*
+!.env.example
+.git
+.github
+*.log

@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  quality:
+    name: Lint · Typecheck · Test · Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Tests unitarios
+        run: pnpm test
+        env:
+          # Values are throwaway: the unit tests never touch the clinical database.
+          JWT_SECRET: ci-secret-value-with-at-least-32-characters
+          ENCRYPTION_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+
+      - name: Build
+        run: pnpm build
