@@ -11,8 +11,14 @@ import type { ClaimedJob, InferenceJobPayload, QueueProvider } from './queue.pro
  * PostgreSQL-backed inference queue.
  *
  * `claimNext` uses `FOR UPDATE SKIP LOCKED`, the standard PostgreSQL pattern for a work queue:
- * concurrent workers never hand the same job to two engines, and a crashed worker's job is picked
- * up again instead of blocking the queue.
+ * concurrent workers never hand the same job to two engines.
+ *
+ * A crashed worker's job is picked up again because the claim also considers jobs whose LEASE has
+ * expired — `bloqueado_en` older than `queue.leaseMs`. That column was being written and never
+ * read, and the difference is not academic: a connection that dies between the claiming `UPDATE`
+ * and its reply leaves the job marked `ejecutando` with nobody behind it, and the portal then
+ * shows "el modelo está leyendo el caso" for ever. Observed against a remote database that drops
+ * connections.
  */
 @Injectable()
 export class PostgresQueueProvider implements QueueProvider {
@@ -28,7 +34,7 @@ export class PostgresQueueProvider implements QueueProvider {
       caseId: payload.caseId,
       imageId: payload.imageId,
       requestedBy: payload.requestedBy,
-      status: 'pending',
+      status: 'pendiente',
       attempts: 0,
       maxAttempts: this.config.queue.maxAttempts,
     });
@@ -36,21 +42,42 @@ export class PostgresQueueProvider implements QueueProvider {
     return saved.id;
   }
 
+  /**
+   * El `RETURNING` va con ALIAS, y no es cosmética.
+   *
+   * Las columnas de la tabla están en español y el validador de más abajo pide `case_id` e
+   * `image_id`. Sin alias, cada reclamo devolvía una fila que el validador daba por malformada y
+   * `claimNext` respondía `null`: el `UPDATE` sí marcaba el trabajo como «ejecutando» y le sumaba
+   * un intento, pero NADIE lo ejecutaba. La cola de inferencia llevaba muerta desde el renombrado
+   * al español, en silencio y sin un solo error — el análisis se quedaba «pendiente» para siempre.
+   *
+   * Otra cadena de SQL que ni el compilador ni el linter pueden mirar. Por eso el alias se
+   * comprueba ahora en una prueba.
+   */
   async claimNext(): Promise<ClaimedJob | null> {
     const raw: unknown = await this.repository.query(
-      `UPDATE "inference_jobs"
-          SET "status" = 'running',
-              "attempts" = "attempts" + 1,
-              "locked_at" = now(),
-              "updated_at" = now()
+      `UPDATE "trabajos_inferencia"
+          SET "estado_codigo" = 'ejecutando',
+              "intentos" = "intentos" + 1,
+              "bloqueado_en" = now(),
+              "actualizado_en" = now()
         WHERE "id" = (
-          SELECT "id" FROM "inference_jobs"
-           WHERE "status" = 'pending'
-           ORDER BY "created_at" ASC
+          SELECT "id" FROM "trabajos_inferencia"
+           WHERE "estado_codigo" = 'pendiente'
+              OR ("estado_codigo" = 'ejecutando'
+                  AND "intentos" < "max_intentos"
+                  AND "bloqueado_en" < now() - ($1 || ' milliseconds')::interval)
+           ORDER BY "creado_en" ASC
            FOR UPDATE SKIP LOCKED
            LIMIT 1
         )
-        RETURNING "id", "case_id", "image_id", "requested_by", "attempts", "max_attempts"`,
+        RETURNING "id",
+                  "caso_id"      AS "case_id",
+                  "imagen_id"    AS "image_id",
+                  "solicitado_por" AS "requested_by",
+                  "intentos"     AS "attempts",
+                  "max_intentos" AS "max_attempts"`,
+      [this.config.queue.leaseMs],
     );
 
     const row = extractClaimedRow(raw);
@@ -66,10 +93,51 @@ export class PostgresQueueProvider implements QueueProvider {
     };
   }
 
+  /**
+   * Marca como fallidos los trabajos abandonados que ya agotaron sus intentos.
+   *
+   * Sin esto, un trabajo que muriera en su último intento se quedaría en `ejecutando` para
+   * siempre: `claimNext` no lo reclama —no le quedan intentos— y nada más lo cierra.
+   */
+  async expireStale(): Promise<Array<{ jobId: string; caseId: string; imageId: string }>> {
+    const raw: unknown = await this.repository.query(
+      `UPDATE "trabajos_inferencia"
+          SET "estado_codigo" = 'fallido',
+              "bloqueado_en" = NULL,
+              "ultimo_error" = 'El trabajo quedó abandonado y agotó sus intentos.',
+              "actualizado_en" = now()
+        WHERE "id" IN (
+          SELECT "id" FROM "trabajos_inferencia"
+           WHERE "estado_codigo" = 'ejecutando'
+             AND "intentos" >= "max_intentos"
+             AND "bloqueado_en" < now() - ($1 || ' milliseconds')::interval
+           FOR UPDATE SKIP LOCKED
+        )
+        RETURNING "id", "caso_id" AS "case_id", "imagen_id" AS "image_id"`,
+      [this.config.queue.leaseMs],
+    );
+
+    if (!Array.isArray(raw)) return [];
+    const rows: unknown = Array.isArray(raw[0]) ? raw[0] : raw;
+    if (!Array.isArray(rows)) return [];
+
+    return rows.flatMap((row: unknown) => {
+      if (typeof row !== 'object' || row === null) return [];
+      const record = row as Record<string, unknown>;
+      const id = record['id'];
+      const caseId = record['case_id'];
+      const imageId = record['image_id'];
+      if (typeof id !== 'string' || typeof caseId !== 'string' || typeof imageId !== 'string') {
+        return [];
+      }
+      return [{ jobId: id, caseId, imageId }];
+    });
+  }
+
   async complete(jobId: string, inferenceId: string): Promise<void> {
     await this.repository.update(
       { id: jobId },
-      { status: 'succeeded', inferenceId, lockedAt: null, lastError: null },
+      { status: 'exitoso', inferenceId, lockedAt: null, lastError: null },
     );
   }
 
@@ -81,7 +149,7 @@ export class PostgresQueueProvider implements QueueProvider {
     await this.repository.update(
       { id: jobId },
       {
-        status: exhausted ? 'failed' : 'pending',
+        status: exhausted ? 'fallido' : 'pendiente',
         lockedAt: null,
         lastError: error.slice(0, 2000),
       },

@@ -5,6 +5,8 @@
  * (Redis/BullMQ, MinIO, MLflow) without touching application code. See TRACEABILITY.md section 4.
  */
 
+import { CAPTURE_DEFAULT_TTL_SECONDS } from 'src/common/domain';
+
 export type StorageDriver = 'local' | 'minio';
 export type QueueDriver = 'postgres' | 'bullmq';
 
@@ -16,6 +18,10 @@ export interface AppConfig {
 
   database: {
     url: string;
+    /** Plazo máximo de una consulta, en el servidor y en el cliente. */
+    statementTimeoutMs: number;
+    /** Plazo para abrir una conexión nueva. */
+    connectTimeoutMs: number;
     ssl: boolean;
   };
 
@@ -30,6 +36,13 @@ export interface AppConfig {
     encryptionKey: string;
     /** TTL of the signed image URLs, in seconds. RNF-02 mandates 15 minutes. */
     signedUrlTtlSeconds: number;
+    /**
+     * TTL of a mobile capture session, in seconds.
+     *
+     * Same window as the signed URLs, and for the same reason: it is the only thing bounding a QR
+     * link that anyone holding it can use, since the phone carries no session.
+     */
+    captureSessionTtlSeconds: number;
   };
 
   storage: {
@@ -49,12 +62,30 @@ export interface AppConfig {
     driver: QueueDriver;
     pollIntervalMs: number;
     maxAttempts: number;
+    /**
+     * Cuánto puede un trabajo estar «ejecutando» antes de darlo por abandonado.
+     *
+     * Un obrero puede morir a media faena —el proceso se reinicia, la conexión con la base se
+     * corta entre el `UPDATE` que reclama el trabajo y su respuesta— y entonces el trabajo queda
+     * marcado como en curso sin nadie detrás. Pasado el arriendo, otro obrero puede reclamarlo.
+     *
+     * Ha de ser holgadamente mayor que lo que tarda el motor, o se le quitaría el trabajo a un
+     * obrero que sigue vivo y la misma imagen se inferiría dos veces.
+     */
+    leaseMs: number;
     redis: { host: string; port: number };
   };
 
   aiEngine: {
     url: string;
     timeoutMs: number;
+    /**
+     * Whether an uploaded photograph is screened for being an evaluable facial image before it is
+     * filed. Off is a legitimate operating mode: the check costs a call per upload, and a model
+     * that turns out to be too strict would block a real intake — the one failure a clinic cannot
+     * absorb. It never blocks on its own when the engine is unreachable.
+     */
+    screenUploads: boolean;
   };
 
   study: {
@@ -68,6 +99,39 @@ export interface AppConfig {
 
   reports: {
     outputDir: string;
+  };
+
+  /** Letterhead of the prescription PDF. */
+  clinic: {
+    name: string;
+    subtitle: string;
+    address: string;
+    phone: string;
+    email: string;
+    taxId: string;
+  };
+
+  /**
+   * How the outside world reaches this API (e.g. an ngrok tunnel). Needed only for a gateway
+   * that must fetch a file from us — Infobip downloads the prescription PDF from here. Empty =
+   * the prescription travels as text.
+   */
+  publicBaseUrl: string;
+
+  messaging: {
+    /** Country code prepended to local numbers (Peru: 51). */
+    defaultCountryCode: string;
+    timeoutMs: number;
+    infobip: {
+      /** `https://<subdominio>.api.infobip.com`, as shown in the Infobip portal. Empty = off. */
+      baseUrl: string;
+      apiKey: string;
+      /** Registered WhatsApp sender; on the free trial, Infobip's test sender. */
+      sender: string;
+      /** Fallback template when free text is refused; empty disables the fallback. */
+      template: string;
+      templateLanguage: string;
+    };
   };
 }
 
@@ -144,6 +208,9 @@ export function loadConfiguration(): AppConfig {
     database: {
       url: requireEnv('DATABASE_URL'),
       ssl: envBoolean('DATABASE_SSL', false),
+      // Holgado para los informes del administrador y muy por debajo de «para siempre».
+      statementTimeoutMs: envNumber('DB_STATEMENT_TIMEOUT_MS', 60_000),
+      connectTimeoutMs: envNumber('DB_CONNECT_TIMEOUT_MS', 15_000),
     },
 
     jwt: {
@@ -155,6 +222,10 @@ export function loadConfiguration(): AppConfig {
     security: {
       encryptionKey,
       signedUrlTtlSeconds: envNumber('SIGNED_URL_TTL_SECONDS', 900),
+      captureSessionTtlSeconds: envNumber(
+        'CAPTURE_SESSION_TTL_SECONDS',
+        CAPTURE_DEFAULT_TTL_SECONDS,
+      ),
     },
 
     storage: {
@@ -174,6 +245,8 @@ export function loadConfiguration(): AppConfig {
       driver: envEnum('QUEUE_DRIVER', ['postgres', 'bullmq'] as const, 'postgres'),
       pollIntervalMs: envNumber('QUEUE_POLL_INTERVAL_MS', 1500),
       maxAttempts: envNumber('QUEUE_MAX_ATTEMPTS', 3),
+      // Cuatro veces el tiempo máximo del motor: si sigue trabajando, no se le quita el trabajo.
+      leaseMs: envNumber('QUEUE_LEASE_MS', envNumber('AI_ENGINE_TIMEOUT_MS', 30000) * 4),
       redis: {
         host: envString('REDIS_HOST', '127.0.0.1'),
         port: envNumber('REDIS_PORT', 6379),
@@ -183,6 +256,7 @@ export function loadConfiguration(): AppConfig {
     aiEngine: {
       url: envString('AI_ENGINE_URL', 'http://127.0.0.1:8000').replace(/\/+$/, ''),
       timeoutMs: envNumber('AI_ENGINE_TIMEOUT_MS', 30000),
+      screenUploads: envBoolean('IMAGE_SCREENING_ENABLED', true),
     },
 
     study: {
@@ -193,6 +267,31 @@ export function loadConfiguration(): AppConfig {
 
     reports: {
       outputDir: envString('REPORTS_OUTPUT_DIR', './reports-output'),
+    },
+
+    clinic: {
+      name: envString('CLINIC_NAME', 'Consultorio Dermatológico — Estudio Acné UNT'),
+      subtitle: envString('CLINIC_SUBTITLE', 'Universidad Nacional de Trujillo · Facultad de Ingeniería'),
+      address: envString('CLINIC_ADDRESS', 'Trujillo, La Libertad, Perú'),
+      phone: envString('CLINIC_PHONE', ''),
+      email: envString('CLINIC_EMAIL', ''),
+      taxId: envString('CLINIC_TAX_ID', ''),
+    },
+    publicBaseUrl: envString('PUBLIC_BASE_URL', '').trim().replace(/\/+$/, ''),
+
+    messaging: {
+      defaultCountryCode: envString('MESSAGING_DEFAULT_COUNTRY_CODE', '51').replace(/\D/g, ''),
+      timeoutMs: envNumber('MESSAGING_TIMEOUT_MS', 15000),
+      infobip: {
+        baseUrl: envString('INFOBIP_BASE_URL', '')
+          .trim()
+          .replace(/\/+$/, '')
+          .replace(/^(?!https?:\/\/)(.+)$/, 'https://$1'),
+        apiKey: envString('INFOBIP_API_KEY', '').trim(),
+        sender: envString('INFOBIP_WHATSAPP_SENDER', '447860099299').replace(/\D/g, ''),
+        template: envString('INFOBIP_WHATSAPP_TEMPLATE', 'test_whatsapp_template_en').trim(),
+        templateLanguage: envString('INFOBIP_WHATSAPP_TEMPLATE_LANGUAGE', 'en').trim(),
+      },
     },
   };
 }

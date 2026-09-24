@@ -97,6 +97,8 @@ common/domain/   Fuente única de verdad: IGA, GAGS, indicadores, hipótesis, Li
 common/crypto/   AES-256-GCM y tokens firmados (RNF-02)
 auth/ users/     JWT + 4 roles + modo de estudio (RF-TR-01, RF-TR-02)
 patients/        Anonimización, consentimiento e historia longitudinal (RF-TR-03, RNF-07)
+anamnesis/       Cuestionario clínico de acné por visita (extensión, ver TRACEABILITY)
+capture/         Sesiones de captura desde el móvil por QR (Sección 9.3, RNF-02)
 cases/ images/   Casos, apertura cronometrada, imágenes cifradas
 study/           Guard de la variable independiente y Anexo 4
 inference/       Cliente del motor + cola con reintentos
@@ -172,6 +174,7 @@ Ninguna sustitución elimina cobertura de objetivos; todas están declaradas en
 |---|---|---|
 | `StorageProvider` | Disco local cifrado | `STORAGE_DRIVER=minio` |
 | `QueueProvider` | Cola en PostgreSQL | `QUEUE_DRIVER=bullmq` *(pendiente de implementar)* |
+| `WhatsAppService` (`src/messaging/`) | Canal simulado (registrado, no enviado) | `INFOBIP_BASE_URL` + `INFOBIP_API_KEY` → envío real por Infobip (texto); además `PUBLIC_BASE_URL` (túnel ngrok) → la receta va como PDF adjunto; ver `.env.example` |
 
 ---
 

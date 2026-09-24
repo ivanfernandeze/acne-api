@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger'
 
 import { AuditService } from 'src/audit/audit.service';
 import { CurrentUser, Roles } from 'src/common/decorators';
+import { ANALYSIS_ROLES, JOURNEY_ROLES, SYSTEM_MEASUREMENT_MODE } from 'src/common/domain';
 import type { StudyMode } from 'src/common/domain';
 import type {
   AuthenticatedRequest,
@@ -24,6 +25,7 @@ export class SessionsController {
   ) {}
 
   @Get('active')
+  @Roles(...JOURNEY_ROLES)
   @ApiOperation({ summary: 'Devuelve la jornada abierta del profesional, si la hay.' })
   async active(@CurrentUser() user: AuthenticatedUser): Promise<WorkSessionDto | null> {
     const session = await this.sessionsService.findActive(user.id);
@@ -31,21 +33,21 @@ export class SessionsController {
   }
 
   @Post('open')
-  @Roles('dermatologo', 'residente')
+  @Roles(...JOURNEY_ROLES)
   @ApiOperation({ summary: 'Abre una jornada de trabajo (RF-OE4-02).' })
   async open(
     @Body() dto: OpenSessionDto,
     @CurrentUser() user: AuthenticatedUser,
     @Req() request: AuthenticatedRequest,
   ): Promise<WorkSessionDto> {
-    const session = await this.sessionsService.open(user.id, user.studyMode, dto);
+    const session = await this.sessionsService.open(user.id, SYSTEM_MEASUREMENT_MODE, dto);
     await this.auditService.record(
       user,
       {
         action: 'session.open',
         entityType: 'work_session',
         entityId: session.id,
-        metadata: { shift: dto.shift, studyMode: user.studyMode },
+        metadata: { shift: dto.shift, studyMode: SYSTEM_MEASUREMENT_MODE },
       },
       request,
     );
@@ -53,7 +55,7 @@ export class SessionsController {
   }
 
   @Post('close')
-  @Roles('dermatologo', 'residente')
+  @Roles(...JOURNEY_ROLES)
   @ApiOperation({
     summary: 'Cierra la jornada declarando TJ y congela TCAD = NCR / TJ.',
     description:
@@ -80,6 +82,7 @@ export class SessionsController {
   }
 
   @Get()
+  @Roles(...JOURNEY_ROLES)
   @ApiQuery({ name: 'studyMode', required: false })
   @ApiQuery({ name: 'mine', required: false, type: Boolean })
   @ApiOperation({ summary: 'Lista jornadas registradas.' })
@@ -96,6 +99,7 @@ export class SessionsController {
   }
 
   @Get('anexo-7')
+  @Roles(...ANALYSIS_ROLES)
   @ApiQuery({ name: 'studyMode', required: false })
   @ApiQuery({ name: 'includeSynthetic', required: false, type: Boolean })
   @ApiOperation({

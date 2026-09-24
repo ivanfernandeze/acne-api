@@ -1,8 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 
+import { ClinicalCase } from 'src/cases/case.entity';
 import type { StudyMode } from 'src/common/domain';
+import { Patient } from 'src/patients/patient.entity';
+import { User } from 'src/users/user.entity';
 
 import type { Anexo4RowDto } from './dto/anexo4.dto';
 import { ReviewTiming } from './review-timing.entity';
@@ -72,6 +75,18 @@ export class ReviewTimingService {
     return this.repository.findOne({ where: { caseId, studyMode } });
   }
 
+  /**
+   * La medición abierta de este caso en esta condición, si la hay.
+   *
+   * Abierta significa con `t0` sellado y `t1` todavía nulo: una revisión en curso. La necesita
+   * quien tiene que invalidarla sin haberla iniciado él mismo, como la devolución al mostrador.
+   */
+  async findOpen(caseId: string, studyMode: StudyMode): Promise<ReviewTiming | null> {
+    return this.repository.findOne({
+      where: { caseId, studyMode, t1: IsNull(), valid: true },
+    });
+  }
+
   /** Marks a measurement as invalid so it drops out of TRM (abandoned or interrupted review). */
   async invalidate(id: string, notes: string): Promise<ReviewTiming> {
     await this.repository.update({ id }, { valid: false, notes });
@@ -91,23 +106,23 @@ export class ReviewTimingService {
   ): Promise<Anexo4RowDto[]> {
     const query = this.repository
       .createQueryBuilder('timing')
-      .innerJoin('cases', 'c', 'c.id = timing.case_id')
-      .innerJoin('patients', 'p', 'p.id = c.patient_id')
-      .innerJoin('users', 'u', 'u.id = timing.user_id')
+      .innerJoin(ClinicalCase, 'c', 'c.id = timing.caseId')
+      .innerJoin(Patient, 'p', 'p.id = c.patientId')
+      .innerJoin(User, 'u', 'u.id = timing.userId')
       .select('timing.id', 'id')
       .addSelect('timing.t0', 't0')
       .addSelect('timing.t1', 't1')
-      .addSelect('timing.duration_seconds', 'durationSeconds')
+      .addSelect('timing.durationSeconds', 'durationSeconds')
       .addSelect('timing.valid', 'valid')
-      .addSelect('timing.study_mode', 'studyMode')
-      .addSelect('c.case_code', 'caseCode')
-      .addSelect('p.patient_code', 'patientCode')
-      .addSelect('u.full_name', 'professional')
-      .addSelect('c.is_synthetic', 'isSynthetic')
+      .addSelect('timing.studyMode', 'studyMode')
+      .addSelect('c.caseCode', 'caseCode')
+      .addSelect('p.patientCode', 'patientCode')
+      .addSelect('u.fullName', 'professional')
+      .addSelect('c.isSynthetic', 'isSynthetic')
       .orderBy('timing.t0', 'ASC');
 
-    if (studyMode !== null) query.andWhere('timing.study_mode = :studyMode', { studyMode });
-    if (!includeSynthetic) query.andWhere('c.is_synthetic = false');
+    if (studyMode !== null) query.andWhere('timing.studyMode = :studyMode', { studyMode });
+    if (!includeSynthetic) query.andWhere('c.isSynthetic = false');
 
     const raw = await query.getRawMany<RawAnexo4Row>();
     return raw.map((row, index) => ({

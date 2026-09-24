@@ -13,6 +13,7 @@ import {
   HYPOTHESIS_STATEMENTS,
   INDICATOR_DEFINITIONS,
   STATISTICAL_TEST_LABELS,
+  type EffectSize,
   type HypothesisKey,
   type NormalityResult,
   type PairedObservation,
@@ -27,6 +28,7 @@ import type {
   HypothesisTestRequestDto,
   HypothesisTestResultDto,
 } from './dto/stats.dto';
+import { HypothesisPair } from './hypothesis-pair.entity';
 import { HypothesisRun } from './hypothesis-run.entity';
 
 /**
@@ -128,11 +130,18 @@ export class StatsService {
         pretestMean,
         postestMean,
         meanDifference,
-        normality,
+        normalityTest: normality.test,
+        normalityStatistic: normality.applicable ? normality.statistic : null,
+        normalityPValue: normality.applicable ? normality.pValue : null,
+        normalityNormal: normality.normal,
+        normalityApplicable: normality.applicable,
+        normalityNote: normality.note ?? null,
         testApplied: response.test_applied,
         statistic: response.statistic,
         pValue: response.p_value,
-        effectSize: response.effect_size,
+        effectKind: response.effect_size?.kind ?? null,
+        effectValue: response.effect_size?.value ?? null,
+        effectMagnitude: response.effect_size?.magnitude ?? null,
         rejectsNull,
         conclusion: this.buildConclusion(dto.hypothesis, {
           rejectsNull,
@@ -145,7 +154,15 @@ export class StatsService {
           normality,
           baseline,
         }),
-        pairs,
+        // Se guardan por valor: si el caso cambia manana, el contraste ya publicado debe seguir
+        // siendo reproducible exactamente como se corrio.
+        pairRows: pairs.map((pair) => ({
+          pairKey: pair.pairKey,
+          label: pair.label,
+          pretest: pair.pretest,
+          postest: pair.postest,
+          difference: pair.difference,
+        })) as HypothesisPair[],
         seed: 42,
         functionVersion: response.function_version,
         inputHash: hashInput({ hypothesis: dto.hypothesis, alpha, alternative, pairs }),
@@ -215,6 +232,11 @@ export class StatsService {
       where: hypothesis === undefined ? {} : { hypothesis },
       order: { executedAt: 'DESC' },
       take: Math.min(limit, 200),
+      // Los pares dejaron de ser una columna jsonb y son filas de `pares_hipotesis`. Sin pedir la
+      // relacion, TypeORM devuelve la cabecera y `pairs` sale vacio en el DTO: el contraste se
+      // veria correcto pero sin los datos que lo hacen reejecutable, que es justo lo que RNF-05
+      // exige poder mostrar a un evaluador externo.
+      relations: { pairRows: true },
     });
     return runs.map((run) => this.toDto(run));
   }
@@ -292,15 +314,21 @@ export class StatsService {
       pretestMean: run.pretestMean,
       postestMean: run.postestMean,
       meanDifference: run.meanDifference,
-      normality: run.normality,
+      normality: toNormality(run),
       testApplied: run.testApplied,
       testLabel: STATISTICAL_TEST_LABELS[run.testApplied],
       statistic: run.statistic,
       pValue: run.pValue,
-      effectSize: run.effectSize,
+      effectSize: toEffectSize(run),
       rejectsNull: run.rejectsNull,
       conclusion: run.conclusion,
-      pairs: run.pairs,
+      pairs: (run.pairRows ?? []).map((pair) => ({
+        pairKey: pair.pairKey,
+        label: pair.label,
+        pretest: pair.pretest,
+        postest: pair.postest,
+        difference: pair.difference,
+      })),
       seed: run.seed,
       functionVersion: run.functionVersion,
       inputHash: run.inputHash,
@@ -308,4 +336,31 @@ export class StatsService {
       executedAt: run.executedAt.toISOString(),
     };
   }
+}
+
+/**
+ * Rebuilds the normality block the DTO carries from the columns it was split into.
+ *
+ * The statistic and the p-value are null when Shapiro-Wilk did not apply (fewer than three
+ * observations). The DTO's shape predates the split and requires numbers, so the non-applicable
+ * case reports zeros next to `applicable: false` — the flag is what a reader must trust, and a
+ * fabricated statistic would be worse than an obviously inert one.
+ */
+function toNormality(run: HypothesisRun): NormalityResult {
+  return {
+    test: 'shapiro-wilk',
+    statistic: run.normalityStatistic ?? 0,
+    pValue: run.normalityPValue ?? 0,
+    normal: run.normalityNormal,
+    applicable: run.normalityApplicable,
+    ...(run.normalityNote === null ? {} : { note: run.normalityNote }),
+  };
+}
+
+/** Rebuilds the effect size, which is absent whenever the test reported none. */
+function toEffectSize(run: HypothesisRun): EffectSize | null {
+  if (run.effectKind === null || run.effectValue === null || run.effectMagnitude === null) {
+    return null;
+  }
+  return { kind: run.effectKind, value: run.effectValue, magnitude: run.effectMagnitude };
 }

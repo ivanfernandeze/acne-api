@@ -5,6 +5,16 @@ import dataSource from '../data-source';
 /**
  * Creates the initial accounts so the system can be used right after `migration:run`.
  *
+ * ONE ACCOUNT PER ROLE, and no more. It used to create seven — four of them dermatologists —
+ * because HE₃ contrasts the satisfaction of each professional against a baseline and Shapiro-Wilk
+ * needs at least three respondents to be defined at all. That reasoning was sound and the place was
+ * wrong: those four were never staff of the clinic, they were padding for the demonstration census,
+ * and mixing them in here made the system look like it had seven people for three roles.
+ *
+ * The professionals the synthetic census needs are created by `seed:study` and flagged
+ * `es_sintetico`, exactly like the thirty cases they review. Deleting the demonstration data now
+ * deletes them too.
+ *
  * Passwords are generated randomly and printed ONCE. Nothing is hard-coded: a thesis prototype
  * that ships with a known default password is a liability the moment it is demonstrated on a
  * networked machine.
@@ -35,6 +45,8 @@ const USERS: SeedUser[] = [
     studyMode: 'produccion',
     specialty: null,
   },
+  // Arranca en `pretest` a propósito: es la condición O₁ del diseño, y el estudio empieza midiendo
+  // sin la herramienta. Pasar a postest ES la intervención X, y se hace desde el portal.
   {
     email: 'dermatologo@centro.pe',
     fullName: 'Dra. Ana Torres Vega',
@@ -42,36 +54,14 @@ const USERS: SeedUser[] = [
     studyMode: 'pretest',
     specialty: 'Dermatología clínica',
   },
+  // Opera el mostrador: registra al paciente, abre el caso y entrega el QR. No diagnostica, así que
+  // no participa del experimento y se queda en `produccion`.
   {
-    email: 'residente@centro.pe',
-    fullName: 'Dr. Luis Campos Ríos',
-    role: 'residente',
-    studyMode: 'pretest',
-    specialty: 'Residencia en dermatología',
-  },
-  // HE3 contrasts the TSP of each professional against a baseline, so the questionnaire needs at
-  // least three respondents for Shapiro-Wilk to be defined at all. A specialised centre with four
-  // diagnosing professionals is also the realistic scale of the study.
-  {
-    email: 'dermatologo2@centro.pe',
-    fullName: 'Dr. Manuel Salazar Peña',
-    role: 'dermatologo',
-    studyMode: 'pretest',
-    specialty: 'Dermatología clínica',
-  },
-  {
-    email: 'residente2@centro.pe',
-    fullName: 'Dra. Carmen Ipanaqué Soto',
-    role: 'residente',
-    studyMode: 'pretest',
-    specialty: 'Residencia en dermatología',
-  },
-  {
-    email: 'evaluador@unt.edu.pe',
-    fullName: 'Evaluador estadístico',
-    role: 'evaluador_estadistico',
+    email: 'tecnico@centro.pe',
+    fullName: 'Téc. Rosa Guerrero Lino',
+    role: 'tecnico',
     studyMode: 'produccion',
-    specialty: null,
+    specialty: 'Admisión y toma de imágenes',
   },
 ];
 
@@ -81,7 +71,7 @@ async function main(): Promise<void> {
   const created: Array<{ email: string; role: string; password: string }> = [];
 
   for (const user of USERS) {
-    const existing = await dataSource.query('SELECT "id" FROM "users" WHERE "email" = $1', [
+    const existing = await dataSource.query('SELECT "id" FROM "usuarios" WHERE "correo" = $1', [
       user.email,
     ]);
     if ((existing as unknown[]).length > 0) {
@@ -91,7 +81,7 @@ async function main(): Promise<void> {
 
     const password = generatePassword();
     await dataSource.query(
-      `INSERT INTO "users" ("email","password_hash","full_name","role","study_mode","specialty","active")
+      `INSERT INTO "usuarios" ("correo","hash_contrasena","nombre_completo","rol_codigo","modo_estudio_codigo","especialidad","activo")
        VALUES ($1,$2,$3,$4,$5,$6,true)`,
       [user.email, hashPassword(password), user.fullName, user.role, user.studyMode, user.specialty],
     );

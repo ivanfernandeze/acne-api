@@ -3,14 +3,30 @@ import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger'
 
 import { AuditService } from 'src/audit/audit.service';
 import { CurrentUser, Roles } from 'src/common/decorators';
-import { CASE_STATUSES, STUDY_MODES, type CaseStatus, type StudyMode } from 'src/common/domain';
+import {
+  DIAGNOSING_ROLES,
+  CASE_ACCESS_ROLES,
+  CASE_STATUSES,
+  IDENTITY_ROLES,
+  INTAKE_ROLES,
+  STUDY_MODES,
+  type CaseStatus,
+  type StudyMode,
+  SYSTEM_MEASUREMENT_MODE,
+} from 'src/common/domain';
 import type {
   AuthenticatedRequest,
   AuthenticatedUser,
 } from 'src/common/interfaces/authenticated-user';
 
 import { CasesService } from './cases.service';
-import { CaseDetailDto, CaseSummaryDto, CreateCaseDto, UpdateCaseDto } from './dto/case.dto';
+import {
+  CaseDetailDto,
+  CaseReturnDto,
+  CaseSummaryDto,
+  CreateCaseDto,
+  UpdateCaseDto,
+} from './dto/case.dto';
 
 /** Covers: RF-TR-01, RF-TR-03, OE1 (apertura cronometrada). */
 @ApiTags('cases')
@@ -23,6 +39,7 @@ export class CasesController {
   ) {}
 
   @Get()
+  @Roles(...CASE_ACCESS_ROLES)
   @ApiQuery({ name: 'studyMode', required: false, enum: STUDY_MODES })
   @ApiQuery({ name: 'status', required: false, enum: CASE_STATUSES })
   @ApiQuery({ name: 'mine', required: false, type: Boolean })
@@ -44,7 +61,7 @@ export class CasesController {
   @ApiOperation({
     summary: 'Bandeja de casos con filtro por modo de estudio (Sección 9.3).',
     description:
-      'Para `dermatologo` y `residente` cada caso incluye `patientName` descifrado, de modo que ' +
+      'Para los roles que pueden ver la identidad cada caso incluye `patientName` descifrado, de modo que ' +
       'la bandeja se pueda leer por nombre y no solo por código (RF-TR-03). Para el resto de ' +
       'roles llega en `null`.',
   })
@@ -58,14 +75,14 @@ export class CasesController {
     @Query('pending') pending?: string,
     @Query('search') search?: string,
   ): Promise<CaseSummaryDto[]> {
-    const maySeeIdentity = user.role === 'dermatologo' || user.role === 'residente';
+    const maySeeIdentity = IDENTITY_ROLES.includes(user.role);
 
     const cases = await this.casesService.findAll({
       studyMode,
       status,
       assignedUserId: mine === 'true' ? user.id : undefined,
       includeSynthetic: includeSynthetic === 'true',
-      pendingForMode: pending === 'true' ? user.studyMode : undefined,
+      pendingForMode: pending === 'true' ? SYSTEM_MEASUREMENT_MODE : undefined,
       revealIdentity: maySeeIdentity,
       search,
     });
@@ -87,12 +104,14 @@ export class CasesController {
   }
 
   @Post()
-  @Roles('dermatologo', 'residente', 'admin')
+  @Roles(...INTAKE_ROLES)
   @ApiOperation({
     summary: 'Crea un caso clínico bajo la condición experimental actual del usuario.',
     description:
-      'El caso queda sellado con el `study_mode` de quien lo crea y lo conserva de por vida: es ' +
-      'lo que permite que las mediciones de pretest y postest sean pareables.',
+      'El caso queda sellado con el `study_mode` de quien lo crea. **No es la unidad de análisis**: ' +
+      'los indicadores y los contrastes emparejan por `review_timings.study_mode` y ' +
+      '`diagnoses.study_mode`, de modo que un caso abierto por un técnico (que opera en ' +
+      '`produccion`) sigue siendo medible cuando el especialista lo revisa en pretest y en postest.',
   })
   async create(
     @Body() dto: CreateCaseDto,
@@ -114,6 +133,7 @@ export class CasesController {
   }
 
   @Get(':id')
+  @Roles(...CASE_ACCESS_ROLES)
   @ApiOperation({
     summary: 'Ficha completa del caso.',
     description:
@@ -135,7 +155,7 @@ export class CasesController {
   }
 
   @Post(':id/open')
-  @Roles('dermatologo', 'residente')
+  @Roles(...DIAGNOSING_ROLES)
   @ApiOperation({
     summary: 'Abre la ficha e inicia el cronómetro de revisión (RF-OE1-01).',
     description:
@@ -154,7 +174,7 @@ export class CasesController {
         action: 'case.open',
         entityType: 'case',
         entityId: id,
-        metadata: { studyMode: user.studyMode, t0: detail.timing?.t0 },
+        metadata: { studyMode: SYSTEM_MEASUREMENT_MODE, t0: detail.timing?.t0 },
       },
       request,
     );
@@ -162,7 +182,7 @@ export class CasesController {
   }
 
   @Post(':id/close')
-  @Roles('dermatologo', 'residente', 'admin')
+  @Roles(...DIAGNOSING_ROLES, 'admin')
   @ApiOperation({ summary: 'Cierra el caso una vez diagnosticado.' })
   async close(
     @Param('id', ParseUUIDPipe) id: string,
@@ -178,8 +198,88 @@ export class CasesController {
     return closed;
   }
 
+  @Post(':id/request-photos')
+  @Roles(...DIAGNOSING_ROLES)
+  @ApiOperation({
+    summary: 'Devuelve el caso al mostrador porque las imágenes no alcanzan.',
+    description:
+      'INVALIDA la medición en curso en vez de detenerla: entre la devolución y la reposición ' +
+      'pueden pasar días de espera, y contarlos haría de TRM una medida de la logística de la ' +
+      'clínica y no del trabajo del especialista (OE1). La fila invalidada se conserva.',
+  })
+  async requestPhotos(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CaseReturnDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<CaseDetailDto> {
+    const detail = await this.casesService.requestPhotos(id, dto.reason, user);
+    await this.auditService.record(
+      user,
+      {
+        action: 'case.request_photos',
+        entityType: 'case',
+        entityId: id,
+        metadata: { studyMode: SYSTEM_MEASUREMENT_MODE },
+      },
+      request,
+    );
+    return detail;
+  }
+
+  @Post(':id/resubmit')
+  @Roles(...INTAKE_ROLES)
+  @ApiOperation({
+    summary: 'El mostrador repone lo que faltaba y devuelve el caso a la bandeja.',
+    description:
+      'No reabre el cronómetro: eso ocurre cuando el especialista abre la ficha otra vez, que es ' +
+      'el instante en que empieza a trabajar de verdad.',
+  })
+  async resubmit(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<CaseDetailDto> {
+    const detail = await this.casesService.resubmit(id, user);
+    await this.auditService.record(
+      user,
+      { action: 'case.resubmit', entityType: 'case', entityId: id },
+      request,
+    );
+    return detail;
+  }
+
+  @Post(':id/refer')
+  @Roles(...DIAGNOSING_ROLES)
+  @ApiOperation({
+    summary: 'Deriva el caso a atención presencial.',
+    description:
+      'Estado FINAL que no es un éxito. La medición se cierra normalmente —el especialista sí ' +
+      'dedicó ese tiempo— pero el caso no produce un diagnóstico comparable, de modo que queda ' +
+      'fuera de TPD y no cuenta como caso resuelto para TCAD.',
+  })
+  async refer(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CaseReturnDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<CaseDetailDto> {
+    const detail = await this.casesService.referInPerson(id, dto.reason, user);
+    await this.auditService.record(
+      user,
+      {
+        action: 'case.refer',
+        entityType: 'case',
+        entityId: id,
+        metadata: { studyMode: SYSTEM_MEASUREMENT_MODE },
+      },
+      request,
+    );
+    return detail;
+  }
+
   @Patch(':id')
-  @Roles('dermatologo', 'admin')
+  @Roles(...DIAGNOSING_ROLES, 'admin')
   @ApiOperation({ summary: 'Actualiza el patrón de consenso o la asignación del caso.' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,

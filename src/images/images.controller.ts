@@ -1,4 +1,6 @@
 import {
+  BadRequestException,
+  Body,
   Controller,
   Get,
   Inject,
@@ -17,12 +19,14 @@ import type { Response } from 'express';
 
 import { AuditService } from 'src/audit/audit.service';
 import { CurrentUser, Public, Roles } from 'src/common/decorators';
+import { CASE_ACCESS_ROLES, INTAKE_ROLES, SHOT_KEYS, isShotKey } from 'src/common/domain';
 import type {
   AuthenticatedRequest,
   AuthenticatedUser,
 } from 'src/common/interfaces/authenticated-user';
 import { APP_CONFIG, type AppConfig } from 'src/config/configuration';
 
+import { RelabelImageDto, UploadedImageDto } from './dto/image.dto';
 import type { CaseImageDto, UploadedImage } from './images.service';
 import { ImagesService } from './images.service';
 
@@ -36,12 +40,30 @@ export class ImagesController {
     @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
 
+  /**
+   * Quien registra el ingreso, no solo quien diagnostica.
+   *
+   * La toma fotográfica es parte del ingreso y el técnico es quien la hace: dejar la ruta en manos
+   * del grupo que diagnostica le devolvía un 403 en la misma pantalla que el portal le ofrece.
+   */
   @Post('case/:caseId')
   @ApiBearerAuth()
-  @Roles('dermatologo', 'residente', 'admin')
+  @Roles(...INTAKE_ROLES)
   @ApiConsumes('multipart/form-data')
   @ApiBody({
-    schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } },
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        shotKey: {
+          type: 'string',
+          enum: [...SHOT_KEYS],
+          description:
+            'Toma del protocolo fotográfico a la que corresponde la imagen. Sin ella la fotografía ' +
+            'no cuenta para las tomas obligatorias.',
+        },
+      },
+    },
   })
   @ApiOperation({
     summary: 'Sube una imagen clínica facial y la cifra en reposo.',
@@ -53,28 +75,92 @@ export class ImagesController {
   async upload(
     @Param('caseId', ParseUUIDPipe) caseId: string,
     @UploadedFile() file: UploadedImage | undefined,
+    @Body('shotKey') shotKey: unknown,
     @CurrentUser() user: AuthenticatedUser,
     @Req() request: AuthenticatedRequest,
-  ): Promise<CaseImageDto> {
+  ): Promise<UploadedImageDto> {
     if (file === undefined) {
       throw new Error('No se recibió ningún archivo en el campo "file".');
     }
-    const image = await this.imagesService.upload(caseId, file, user.id);
+    // The desk labels the shot the same way the phone does; an unknown label is a client bug, not
+    // something to store as "no protocol".
+    if (shotKey !== undefined && shotKey !== '' && !isShotKey(shotKey)) {
+      throw new BadRequestException(
+        `Toma fotográfica desconocida. Use una de: ${SHOT_KEYS.join(', ')}.`,
+      );
+    }
+    const shot = isShotKey(shotKey) ? shotKey : null;
+    const { image, warnings } = await this.imagesService.upload(caseId, file, user.id, shot);
     await this.auditService.record(
       user,
       {
         action: 'image.upload',
         entityType: 'case_image',
         entityId: image.id,
-        metadata: { caseId, sizeBytes: image.sizeBytes, sha256: image.sha256 },
+        metadata: { caseId, sizeBytes: image.sizeBytes, sha256: image.sha256, warnings, shotKey: shot },
+      },
+      request,
+    );
+    return { ...this.imagesService.toDto(image, this.apiPrefix(), user.id), warnings };
+  }
+
+  @Post(':id/shot')
+  @ApiBearerAuth()
+  @Roles(...INTAKE_ROLES)
+  @ApiOperation({
+    summary: 'Corrige la toma (vista) de una fotografía ya subida.',
+    description:
+      'Para rotular como perfil una foto que se subió como vista general sin volver a subirla. ' +
+      'No toca los bytes ni afecta a inferencias o diagnósticos; solo la comprobación de tomas ' +
+      'obligatorias lee la etiqueta.',
+  })
+  async relabel(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RelabelImageDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<CaseImageDto> {
+    const image = await this.imagesService.relabel(id, dto.shotKey);
+    await this.auditService.record(
+      user,
+      {
+        action: 'image.relabel',
+        entityType: 'case_image',
+        entityId: image.id,
+        metadata: { caseId: image.caseId, shotKey: dto.shotKey },
       },
       request,
     );
     return this.imagesService.toDto(image, this.apiPrefix(), user.id);
   }
 
+  @Post(':id/remove')
+  @ApiBearerAuth()
+  @Roles(...INTAKE_ROLES)
+  @ApiOperation({
+    summary: 'Retira una fotografía subida por error.',
+    description:
+      'POST y no DELETE: el borrado duro está prohibido en toda la API y esta operación lleva ' +
+      'condiciones propias. Se niega si el modelo ya leyó la imagen o si el caso ya tiene un ' +
+      'diagnóstico firmado; en ambos casos la fotografía es el sustento de algo ya registrado.',
+  })
+  async remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<{ removed: boolean }> {
+    const { removed, caseId } = await this.imagesService.remove(id);
+    await this.auditService.record(
+      user,
+      { action: 'image.remove', entityType: 'case_image', entityId: id, metadata: { caseId } },
+      request,
+    );
+    return { removed };
+  }
+
   @Get('case/:caseId')
   @ApiBearerAuth()
+  @Roles(...CASE_ACCESS_ROLES)
   @ApiOperation({ summary: 'Lista las imágenes de un caso con enlaces firmados.' })
   async findByCase(
     @Param('caseId', ParseUUIDPipe) caseId: string,

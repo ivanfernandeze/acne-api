@@ -5,9 +5,20 @@ import { Public, Roles } from 'src/common/decorators';
 import { InferenceService } from 'src/inference/inference.service';
 import { AiEngineClient } from 'src/inference/ai-engine.client';
 
-import { AuditLogDto, IiaCheckDto, ThesisCoverageDto } from './dto/audit.dto';
+import {
+  AuditActionCountDto,
+  AuditLogDto,
+  IiaCheckDto,
+  ThesisCoverageDto,
+} from './dto/audit.dto';
 import { AuditService } from './audit.service';
 import { COVERAGE_REGISTRY, type CoverageEntry } from './thesis-coverage.registry';
+import {
+  AUDIT_ROLES,
+  COVERAGE_STATUS_LABELS,
+  auditActionLabel,
+  auditEntityLabel,
+} from 'src/common/domain';
 
 /**
  * Thesis traceability and verification of the independent variable.
@@ -55,7 +66,7 @@ export class AuditApiController {
       if (entry.objective === 'OE2') {
         return {
           ...entry,
-          status: 'partial',
+          status: 'parcial',
           notes:
             `${entry.notes ?? ''} La tubería está implementada y verificada, pero el motor opera ` +
             `con backend "${modelBackend}": falta sustituir el stub por pesos entrenados.`,
@@ -64,14 +75,14 @@ export class AuditApiController {
       if (entry.objective === 'OG') {
         return {
           ...entry,
-          status: 'partial',
+          status: 'parcial',
           notes: `${entry.notes ?? ''} Bloqueado por OE2.`,
         };
       }
       if (entry.objective === 'IIA') {
         return {
           ...entry,
-          status: 'partial',
+          status: 'parcial',
           notes: `${entry.notes ?? ''} /audit/iia-check reporta operational = false.`,
         };
       }
@@ -82,12 +93,15 @@ export class AuditApiController {
       blockers.push('No hay un modelo CNN entrenado: el motor responde con el stub determinista.');
     }
 
-    const covered = entries.filter((e) => e.status === 'covered').length;
+    const covered = entries.filter((e) => e.status === 'cubierto').length;
 
     return {
       generatedAt: new Date().toISOString(),
       coveragePct: Math.round((covered / entries.length) * 10000) / 100,
-      entries,
+      entries: entries.map((entry) => ({
+        ...entry,
+        statusLabel: COVERAGE_STATUS_LABELS[entry.status] ?? entry.status,
+      })),
       blockers,
       traceabilityDocument: 'acne-infra/TRACEABILITY.md',
     };
@@ -122,6 +136,7 @@ export class AuditApiController {
     return {
       operational: engine.operational,
       modelBackend: engine.model_backend,
+      modelKind: engine.model_kind,
       version: engine.version,
       weightsChecksum: engine.weights_checksum,
       engineLatencyMedian24hMs: engine.latency_median_24h_ms,
@@ -138,9 +153,25 @@ export class AuditApiController {
     };
   }
 
+  @Get('logs/actions')
+  @ApiBearerAuth()
+  @Roles(...AUDIT_ROLES)
+  @ApiOperation({
+    summary: 'Acciones que aparecen en la traza, con su recuento.',
+    description:
+      'Se derivan de las propias filas y no de una constante: el catálogo de acciones no está ' +
+      'declarado en ningún sitio —cada una es un literal en su punto de llamada—, así que una ' +
+      'lista escrita a mano quedaría obsoleta al añadir el primer endpoint, y el filtro ocultaría ' +
+      'justo los eventos que nadie sabría buscar.',
+  })
+  async logActions(): Promise<AuditActionCountDto[]> {
+    const rows = await this.auditService.actionSummary();
+    return rows.map((row) => ({ ...row, actionLabel: auditActionLabel(row.action) }));
+  }
+
   @Get('logs')
   @ApiBearerAuth()
-  @Roles('admin', 'evaluador_estadistico')
+  @Roles(...AUDIT_ROLES)
   @ApiQuery({ name: 'action', required: false })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiOperation({ summary: 'Traza de auditoría append-only (RNF-02).' })
@@ -152,6 +183,13 @@ export class AuditApiController {
       limit === undefined ? 100 : Number(limit),
       action,
     );
-    return logs.map((log) => ({ ...log, createdAt: log.createdAt.toISOString() }));
+    // El nombre se resuelve aquí y no en el portal: la traza es evidencia de RNF-02 y quien la
+    // exporte o la cite debe recibir el mismo texto que ve en pantalla.
+    return logs.map((log) => ({
+      ...log,
+      actionLabel: auditActionLabel(log.action),
+      entityLabel: auditEntityLabel(log.entityType),
+      createdAt: log.createdAt.toISOString(),
+    }));
   }
 }

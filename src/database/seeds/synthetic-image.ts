@@ -1,5 +1,7 @@
 import { deflateSync } from 'node:zlib';
 
+import type { IgaClass } from 'src/common/domain';
+
 /**
  * Minimal PNG encoder for the synthetic seed.
  *
@@ -70,21 +72,63 @@ export function encodePng(width: number, height: number, pixels: Buffer): Buffer
   ]);
 }
 
-/**
- * A placeholder "clinical" image: a skin-tone gradient with a few darker blobs standing in for
- * lesions. Deterministic given `rng`, so the seed stays reproducible (RNF-03).
- */
-export function buildSyntheticFaceImage(rng: () => number, size = 256): Buffer {
-  const pixels = Buffer.alloc(size * size * 3);
+/** Lesion load per IGA class: count, radius and inflammation all climb with severity. */
+const LESION_PROFILE: Readonly<Record<IgaClass, { min: number; max: number; radius: number; redness: number }>> = {
+  sin_lesiones: { min: 0, max: 1, radius: 3.5, redness: 0.25 },
+  casi_sin_lesiones: { min: 2, max: 4, radius: 4.5, redness: 0.4 },
+  leve: { min: 5, max: 10, radius: 5.5, redness: 0.55 },
+  moderado: { min: 11, max: 20, radius: 7, redness: 0.75 },
+  severo: { min: 21, max: 35, radius: 9, redness: 1 },
+};
 
+/**
+ * A placeholder "clinical" image: a skin-tone field whose lesion load MATCHES its IGA class.
+ *
+ * It used to draw `6 + floor(rng() * 10)` blobs regardless of the label, so a case marked `severo`
+ * could carry seven faint spots and a `leve` one fourteen. The correlation between image and label
+ * was exactly zero, which made the dataset internally contradictory and made it impossible for ANY
+ * model — this project's CNN included — to score above chance on it. That was a defect, not a
+ * simplification.
+ *
+ * The outer generator is consumed EXACTLY as before — one draw for the count, four per drawn blob —
+ * and the lesion field is then built from a local generator seeded with those values. Keeping the
+ * call count identical is what stops the whole downstream stream from shifting: review times,
+ * diagnoses, journeys and questionnaires all draw from the same `rng`, and a single extra call would
+ * silently change every indicator in the study.
+ */
+export function buildSyntheticFaceImage(
+  rng: () => number,
+  igaClass: IgaClass,
+  size = 256,
+): Buffer {
+  const pixels = Buffer.alloc(size * size * 3);
   const base: Rgb = { r: 226, g: 188, b: 164 };
-  const blobCount = 6 + Math.floor(rng() * 10);
-  const blobs = Array.from({ length: blobCount }, () => ({
-    x: rng() * size,
-    y: rng() * size,
-    radius: 4 + rng() * 9,
-    strength: 0.35 + rng() * 0.4,
+
+  // --- Consume the outer stream exactly as the previous version did -----------
+  const drawnCount = 6 + Math.floor(rng() * 10);
+  const drawn = Array.from({ length: drawnCount }, () => ({
+    x: rng(),
+    y: rng(),
+    radius: rng(),
+    strength: rng(),
   }));
+
+  // --- Build the lesion field from a local generator seeded by those draws -----
+  const profile = LESION_PROFILE[igaClass];
+  const local = mulberry32(seedFrom(drawn));
+  const count = profile.min + Math.floor(local() * (profile.max - profile.min + 1));
+
+  const blobs = Array.from({ length: count }, () => {
+    // Lesions cluster on the face, not on the background, so they stay inside a central disc.
+    const angle = local() * Math.PI * 2;
+    const distance = Math.sqrt(local()) * size * 0.38;
+    return {
+      x: size / 2 + Math.cos(angle) * distance,
+      y: size / 2 + Math.sin(angle) * distance,
+      radius: profile.radius * (0.7 + local() * 0.6),
+      strength: profile.redness * (0.65 + local() * 0.45),
+    };
+  });
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -101,9 +145,11 @@ export function buildSyntheticFaceImage(rng: () => number, size = 256): Buffer {
         const distance = Math.hypot(x - blob.x, y - blob.y);
         if (distance < blob.radius) {
           const intensity = blob.strength * (1 - distance / blob.radius);
-          r -= 55 * intensity;
-          g -= 85 * intensity;
-          b -= 80 * intensity;
+          // Inflammation reddens: green and blue drop far more than red, so a severe field reads
+          // as angry rather than merely dirty.
+          r -= 18 * intensity;
+          g -= 95 * intensity;
+          b -= 92 * intensity;
         }
       }
 
@@ -115,6 +161,28 @@ export function buildSyntheticFaceImage(rng: () => number, size = 256): Buffer {
   }
 
   return encodePng(size, size, pixels);
+}
+
+/** Folds the drawn values into a 32-bit seed for the local generator. */
+function seedFrom(drawn: ReadonlyArray<{ x: number; y: number }>): number {
+  let hash = 0x811c9dc5;
+  for (const item of drawn) {
+    hash = Math.imul(hash ^ Math.floor(item.x * 0xffff), 16777619) >>> 0;
+    hash = Math.imul(hash ^ Math.floor(item.y * 0xffff), 16777619) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+/** Mulberry32, the same tiny generator the seeder uses for the study itself. */
+function mulberry32(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 /** A Grad-CAM-style overlay: warm blobs over a dimmed copy of the subject. */

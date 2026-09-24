@@ -2,14 +2,7 @@ import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Query } from '@nest
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 
 import { CurrentUser, Roles } from 'src/common/decorators';
-import {
-  GENERAL_HYPOTHESIS,
-  HYPOTHESIS_STATEMENTS,
-  INDICATOR_DEFINITIONS,
-  STUDY_MODE_LABELS,
-  iiaValue,
-  type StudyMode,
-} from 'src/common/domain';
+import { ANALYSIS_ROLES, DIAGNOSING_ROLES, GENERAL_HYPOTHESIS, HYPOTHESIS_STATEMENTS, INDICATOR_DEFINITIONS, STUDY_MODE_LABELS, SYSTEM_MEASUREMENT_MODE, STUDY_ROLES, iiaValue, type StudyMode } from 'src/common/domain';
 import type { AuthenticatedUser } from 'src/common/interfaces/authenticated-user';
 
 import { Anexo4RowDto, StudyDesignDto } from './dto/anexo4.dto';
@@ -23,21 +16,24 @@ export class StudyController {
   constructor(private readonly reviewTimingService: ReviewTimingService) {}
 
   @Get('design')
+  @Roles(...STUDY_ROLES)
   @ApiOperation({
     summary: 'Describe el diseño experimental y la condición actual del usuario.',
     description:
       'Diseño preexperimental pretest-postest de un solo grupo (G: O₁ → X → O₂). El portal usa ' +
       'esta respuesta para decidir si muestra u oculta el módulo de IA.',
   })
-  design(@CurrentUser() user: AuthenticatedUser): StudyDesignDto {
+  design(@CurrentUser() _user: AuthenticatedUser): StudyDesignDto {
     return {
       design: 'preexperimental_pretest_postest_un_grupo',
       schema: 'G: O₁ → X → O₂',
       sampleSize: 30,
-      currentStudyMode: user.studyMode,
-      currentStudyModeLabel: STUDY_MODE_LABELS[user.studyMode],
-      iia: iiaValue(user.studyMode),
-      aiEnabled: user.studyMode !== 'pretest',
+      // El pretest es la evaluación MANUAL de la clínica y no ocurre aquí dentro, de modo que
+      // toda medición que este sistema produce es postest y la IA está siempre disponible.
+      currentStudyMode: SYSTEM_MEASUREMENT_MODE,
+      currentStudyModeLabel: STUDY_MODE_LABELS[SYSTEM_MEASUREMENT_MODE],
+      iia: iiaValue(SYSTEM_MEASUREMENT_MODE),
+      aiEnabled: true,
       generalHypothesis: GENERAL_HYPOTHESIS,
       specificHypotheses: HYPOTHESIS_STATEMENTS,
       indicators: Object.values(INDICATOR_DEFINITIONS),
@@ -45,6 +41,7 @@ export class StudyController {
   }
 
   @Get('anexo-4')
+  @Roles(...ANALYSIS_ROLES)
   @ApiQuery({ name: 'studyMode', required: false, enum: ['pretest', 'postest', 'produccion'] })
   @ApiQuery({ name: 'includeSynthetic', required: false, type: Boolean })
   @ApiOperation({
@@ -64,7 +61,7 @@ export class StudyController {
   }
 
   @Patch('timings/:id/invalidate')
-  @Roles('dermatologo', 'admin')
+  @Roles(...DIAGNOSING_ROLES, 'admin')
   @ApiOperation({
     summary: 'Marca una medición de tiempo como inválida.',
     description:

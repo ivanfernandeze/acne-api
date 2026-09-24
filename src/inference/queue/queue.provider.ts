@@ -25,8 +25,24 @@ export interface QueueProvider {
   /** Enqueues an inference and returns the job id. */
   enqueue(payload: InferenceJobPayload): Promise<string>;
 
-  /** Atomically claims the next pending job, or `null` when the queue is empty. */
+  /**
+   * Atomically claims the next pending job, or `null` when the queue is empty.
+   *
+   * "Pending" includes a job abandoned mid-flight: one whose lease expired while it was marked as
+   * running. Without that, a worker that died between claiming and finishing would leave the job
+   * marked running for ever — and the portal keeps showing "the model is reading the case" for a
+   * case nobody is reading.
+   */
   claimNext(): Promise<ClaimedJob | null>;
+
+  /**
+   * Gives up on jobs abandoned mid-flight that have no attempts left.
+   *
+   * @returns the abandoned jobs, so the caller can mark their inferences failed. An inference left
+   *   pending for ever is worse than one marked failed: the second can be retried from the screen,
+   *   the first only looks like the queue is slow.
+   */
+  expireStale(): Promise<Array<{ jobId: string; caseId: string; imageId: string }>>;
 
   complete(jobId: string, inferenceId: string): Promise<void>;
 

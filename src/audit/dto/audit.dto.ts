@@ -1,5 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 
+import { COVERAGE_STATUSES, type CoverageStatus } from 'src/common/domain';
+
 /** Covers: RNF-04 (`/audit/thesis-coverage`) and RF-TR-04 (`/audit/iia-check`). */
 
 export class CoverageEntryDto {
@@ -8,7 +10,9 @@ export class CoverageEntryDto {
   @ApiProperty({ nullable: true, type: String }) indicator: string | null;
   @ApiProperty({ nullable: true, type: String }) formula: string | null;
   @ApiProperty({ nullable: true, type: String }) target: string | null;
-  @ApiProperty({ enum: ['covered', 'partial', 'pending'] }) status: string;
+  @ApiProperty({ enum: COVERAGE_STATUSES }) status: CoverageStatus;
+  @ApiProperty({ description: 'Nombre legible del estado, para pintarlo sin traducir en el portal.' })
+  statusLabel: string;
   @ApiProperty({ type: [String] }) modules: string[];
   @ApiProperty({ type: [String] }) requirements: string[];
   @ApiProperty({ nullable: true, type: String }) notes: string | null;
@@ -34,6 +38,13 @@ export class IiaCheckDto {
   })
   operational: boolean;
   @ApiProperty() modelBackend: string;
+  @ApiProperty({
+    enum: ['stub', 'cnn', 'llm_externo'],
+    description:
+      'Por qué la verificación pasa o falla. Un stub y un LLM externo la fallan por razones que ' +
+      'no son equivalentes, y `operational` por sí solo no las distingue.',
+  })
+  modelKind: string;
   @ApiProperty() version: string;
   @ApiProperty({ nullable: true, type: String }) weightsChecksum: string | null;
   @ApiProperty({ nullable: true, type: Number }) engineLatencyMedian24hMs: number | null;
@@ -58,12 +69,23 @@ export class AuditLogDto {
   @ApiProperty() id: string;
   @ApiProperty({ nullable: true, type: String }) userId: string | null;
   @ApiProperty({ nullable: true, type: String }) userEmail: string | null;
-  @ApiProperty() action: string;
+  @ApiProperty({ description: 'Código de la acción. Es por lo que se filtra y lo que se cita.' })
+  action: string;
+  @ApiProperty({ description: 'Nombre legible de la acción, para pintarlo sin traducir.' })
+  actionLabel: string;
   @ApiProperty() entityType: string;
+  @ApiProperty({ description: 'Nombre legible de la entidad tocada.' }) entityLabel: string;
   @ApiProperty({ nullable: true, type: String }) entityId: string | null;
   @ApiProperty({ nullable: true, type: String }) ipAddress: string | null;
   @ApiProperty({ nullable: true, type: String }) userAgent: string | null;
   @ApiProperty({ nullable: true, type: 'object', additionalProperties: true })
   metadata: Record<string, unknown> | null;
   @ApiProperty() createdAt: string;
+}
+
+/** One action name as it occurs in the trail, with how often. Feeds the filter of the audit view. */
+export class AuditActionCountDto {
+  @ApiProperty({ example: 'patient.identity.read' }) action: string;
+  @ApiProperty({ example: 'Descifrado de identidad del paciente' }) actionLabel: string;
+  @ApiProperty({ description: 'Veces que aparece en toda la traza.' }) count: number;
 }

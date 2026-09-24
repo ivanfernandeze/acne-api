@@ -1,17 +1,19 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsIn, IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsBoolean, IsIn, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 import {
   CASE_STATUSES,
   IGA_CLASSES,
+  SHOT_KEYS,
   STUDY_MODES,
   type CaseStatus,
   type IgaClass,
+  type ShotKey,
   type StudyMode,
 } from 'src/common/domain';
 import { DiagnosisDto } from 'src/diagnoses/dto/diagnosis.dto';
 import { CaseImageDto } from 'src/images/dto/image.dto';
-import { AiInferenceDto } from 'src/inference/dto/inference.dto';
+import { AiInferenceDto, CaseAnalysisDto } from 'src/inference/dto/inference.dto';
 
 export class CreateCaseDto {
   @ApiProperty()
@@ -72,7 +74,7 @@ export class CaseSummaryDto {
     nullable: true,
     type: String,
     description:
-      'Nombre del paciente, descifrado solo para `dermatologo` y `residente` (RF-TR-03). ' +
+      'Nombre del paciente, descifrado solo para los roles que pueden ver la identidad (RF-TR-03). ' +
       'Para el resto de roles llega en `null`; los anexos, exportaciones y reportes usan siempre ' +
       'el código, nunca el nombre.',
   })
@@ -80,6 +82,14 @@ export class CaseSummaryDto {
   @ApiProperty({ nullable: true, type: String }) assignedUserId: string | null;
   @ApiProperty({ nullable: true, type: String }) assignedUserName: string | null;
   @ApiProperty({ enum: STUDY_MODES }) studyMode: StudyMode;
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description:
+      'Por qué el especialista devolvió el caso al mostrador o lo derivó a presencial. Se muestra ' +
+      'a quien recibe el caso: devolverlo sin decir qué falta garantiza una segunda devolución.',
+  })
+  returnReason: string | null;
   @ApiProperty({ enum: CASE_STATUSES }) status: CaseStatus;
   @ApiProperty({ nullable: true, enum: IGA_CLASSES }) groundTruthIga: IgaClass | null;
   @ApiProperty() isSynthetic: boolean;
@@ -108,10 +118,48 @@ export class CaseDetailDto extends CaseSummaryDto {
       'Sugerencia de la CNN. SIEMPRE null cuando el solicitante opera en modo pretest (RF-TR-01).',
   })
   inference: AiInferenceDto | null;
+  @ApiProperty({
+    type: CaseAnalysisDto,
+    nullable: true,
+    description:
+      'Análisis del caso completo (una inferencia por toma obligatoria, combinadas). Null cuando ' +
+      'el solicitante no puede ver la IA o no hay ninguna inferencia.',
+  })
+  caseAnalysis: CaseAnalysisDto | null;
   @ApiProperty({ type: [DiagnosisDto] }) diagnoses: DiagnosisDto[];
   @ApiProperty({ type: CaseTimingDto, nullable: true }) timing: CaseTimingDto | null;
   @ApiProperty({
     description: 'Si el portal debe mostrar el módulo de IA para este usuario y este caso.',
   })
   aiVisible: boolean;
+  @ApiProperty({
+    enum: SHOT_KEYS,
+    isArray: true,
+    description:
+      'Tomas obligatorias del protocolo fotográfico que el caso aún no tiene. Mientras no esté ' +
+      'vacío, la inferencia y el diagnóstico se rechazan con 400. Igual para todos los roles.',
+  })
+  missingShots: ShotKey[];
+  @ApiProperty({
+    type: [String],
+    description:
+      'Avisos de incongruencia entre la anamnesis y la sugerencia de IA (el modelo ve piel limpia ' +
+      'y el cuestionario describe lesiones activas). Vacío cuando no hay sugerencia visible. ' +
+      'Informativo: la decisión es del profesional (RNF-06).',
+  })
+  anamnesisMismatch: string[];
+}
+
+/** Motivo por el que el caso sale del camino feliz: devuelto al mostrador o derivado a presencial. */
+export class CaseReturnDto {
+  @ApiProperty({
+    description:
+      'Qué falta o por qué requiere atención presencial. Obligatorio: devolver un caso sin ' +
+      'decirlo obliga al mostrador a adivinar y garantiza una segunda devolución.',
+    maxLength: 500,
+  })
+  @IsString()
+  @IsNotEmpty({ message: 'Indique el motivo.' })
+  @MaxLength(500)
+  reason: string;
 }

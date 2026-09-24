@@ -1,4 +1,4 @@
-import type { ObjectiveKey } from 'src/common/domain';
+import type { CoverageStatus, ObjectiveKey } from 'src/common/domain';
 
 /**
  * Traceability matrix objective → indicator → modules.
@@ -8,7 +8,7 @@ import type { ObjectiveKey } from 'src/common/domain';
  * of the same commit.
  */
 
-export type CoverageStatus = 'covered' | 'partial' | 'pending';
+export type { CoverageStatus };
 
 export interface CoverageEntry {
   objective: ObjectiveKey;
@@ -32,8 +32,8 @@ export const COVERAGE_REGISTRY: readonly CoverageEntry[] = [
     indicator: 'Compuesto OE1–OE4',
     formula: 'Contraste estadístico agregado',
     target: 'Rechazo de H₀ al 95 % de confianza',
-    status: 'covered',
-    modules: ['api:stats', 'api:reports', 'api:audit', 'ai:stats', 'web:portal/estadistica'],
+    status: 'cubierto',
+    modules: ['api:stats', 'api:reports', 'api:audit', 'ai:stats', 'web:admin/estadistica'],
     requirements: ['RNF-04', 'RNF-05'],
     notes: 'Depende de OE2: si el modelo no está operativo, OG no puede darse por cubierto.',
   },
@@ -43,12 +43,12 @@ export const COVERAGE_REGISTRY: readonly CoverageEntry[] = [
     indicator: 'TRM — Tasa de revisión médica',
     formula: 'TRM = (Σ TRᵢ) / n [min/caso]',
     target: 'Reducción ≥ 30 % postest vs pretest',
-    status: 'covered',
+    status: 'cubierto',
     modules: [
       'api:study/review-timing.service',
       'api:indicators/trm',
       'api:stats',
-      'web:portal/anexos/anexo-4',
+      'web:anexos/anexo-4',
     ],
     requirements: ['RF-OE1-01', 'RF-OE1-02', 'RF-OE1-03', 'RF-OE1-04', 'RF-OE1-05'],
     notes: 't₀ y t₁ los sella el servidor; el cliente no puede alterarlos.',
@@ -59,13 +59,13 @@ export const COVERAGE_REGISTRY: readonly CoverageEntry[] = [
     indicator: 'TPD — Tasa de precisión diagnóstica',
     formula: 'TPD = (DC / DT) × 100 [%]',
     target: 'TPD ≥ 90 % en postest',
-    status: 'covered',
+    status: 'cubierto',
     modules: [
       'api:inference',
       'api:diagnoses',
       'api:indicators/classification',
       'ai:inference',
-      'web:portal/anexos/anexo-5',
+      'web:anexos/anexo-5',
     ],
     requirements: [
       'RF-OE2-01',
@@ -84,8 +84,8 @@ export const COVERAGE_REGISTRY: readonly CoverageEntry[] = [
     indicator: 'TSP — Tasa de satisfacción del personal',
     formula: 'TSP = (Σ PO / PT) × 100 [%]',
     target: 'TSP ≥ 80 % (Likert promedio ≥ 4/5)',
-    status: 'covered',
-    modules: ['api:surveys', 'api:indicators/tsp', 'api:stats', 'web:portal/encuesta'],
+    status: 'cubierto',
+    modules: ['api:surveys', 'api:indicators/tsp', 'api:stats', 'web:dermatologo/encuesta'],
     requirements: ['RF-OE3-01', 'RF-OE3-02', 'RF-OE3-03', 'RF-OE3-04', 'RF-OE3-05'],
     notes: 'Los 8 ítems se sirven verbatim desde common/domain/survey.ts.',
   },
@@ -95,8 +95,8 @@ export const COVERAGE_REGISTRY: readonly CoverageEntry[] = [
     indicator: 'TCAD — Tasa de capacidad de atención',
     formula: 'TCAD = NCR / TJ [casos/hora]',
     target: 'Incremento significativo postest vs pretest',
-    status: 'covered',
-    modules: ['api:sessions', 'api:indicators/tcad', 'api:stats', 'web:portal/anexos/anexo-7'],
+    status: 'cubierto',
+    modules: ['api:sessions', 'api:indicators/tcad', 'api:stats', 'web:anexos/anexo-7'],
     requirements: ['RF-OE4-01', 'RF-OE4-02', 'RF-OE4-03', 'RF-OE4-04'],
     notes: 'NCR lo cuenta el sistema; TJ lo declara el profesional, como manda el instrumento.',
   },
@@ -106,7 +106,7 @@ export const COVERAGE_REGISTRY: readonly CoverageEntry[] = [
     indicator: 'Checklist de operatividad del modelo',
     formula: null,
     target: 'Modelo operativo con pesos entrenados',
-    status: 'covered',
+    status: 'cubierto',
     modules: ['api:audit', 'ai:audit', 'api:study/study-mode.guard'],
     requirements: ['RF-TR-01', 'RF-TR-04'],
     notes:

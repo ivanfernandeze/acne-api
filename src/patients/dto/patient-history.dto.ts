@@ -9,6 +9,7 @@ import {
   type StudyMode,
 } from 'src/common/domain';
 import { CaseImageDto } from 'src/images/dto/image.dto';
+import { AiAssessmentDto } from 'src/inference/dto/inference.dto';
 
 import { PatientResponseDto } from './patient.dto';
 
@@ -46,6 +47,37 @@ export class HistoryInferenceDto {
   @ApiProperty({ description: '`stub` indica que no proviene de una CNN entrenada.' })
   modelBackend: string;
   @ApiProperty() createdAt: string;
+  @ApiProperty({
+    nullable: true,
+    type: AiAssessmentDto,
+    description:
+      'La lectura razonada de esa visita: por qué esa clase, qué lesiones distinguió, qué zonas, ' +
+      'qué diferenciales y qué cambia la anamnesis. Se guardaba desde el principio y no se ' +
+      'mostraba en ningún sitio salvo la ficha del caso abierto; en una consulta de control lo ' +
+      'que se necesita es justamente poder releer el razonamiento de la visita anterior. Nula ' +
+      'cuando el backend solo mira píxeles: una CNN emite cinco números y no los funda en prosa.',
+  })
+  assessment: AiAssessmentDto | null;
+}
+
+/**
+ * Compact view of the visit's anamnesis.
+ *
+ * The timeline shows whether a history was taken and the one flag that changes what may be
+ * prescribed; the 21 answers themselves live on the case file, where there is room to read them.
+ */
+export class HistoryAnamnesisDto {
+  @ApiProperty() complete: boolean;
+  @ApiProperty({ description: 'Versión del catálogo con que se respondió (RNF-03).' })
+  version: string;
+  @ApiProperty({ description: 'Preguntas con respuesta.' }) answeredCount: number;
+  @ApiProperty({
+    description:
+      'Embarazo actual declarado. Los retinoides orales son teratógenos, de modo que la ficha lo ' +
+      'muestra de forma permanente. Es una etiqueta para el profesional, no una decisión ' +
+      'automatizada (RNF-06).',
+  })
+  pregnancyFlag: boolean;
 }
 
 export class HistoryEntryDto {
@@ -75,6 +107,12 @@ export class HistoryEntryDto {
   })
   inference: HistoryInferenceDto | null;
   @ApiProperty({ type: [CaseImageDto] }) images: CaseImageDto[];
+  @ApiProperty({
+    type: HistoryAnamnesisDto,
+    nullable: true,
+    description: 'Null cuando la visita no registró anamnesis.',
+  })
+  anamnesis: HistoryAnamnesisDto | null;
 }
 
 export class PatientHistorySummaryDto {

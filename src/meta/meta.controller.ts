@@ -1,8 +1,15 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { DataSource } from 'typeorm';
+
+import { PrescriptionsService } from 'src/prescriptions/prescriptions.service';
+import { QuestionsService } from 'src/questions/questions.service';
 
 import { Public } from 'src/common/decorators';
 import {
+  ANAMNESIS_SECTIONS,
+  ANAMNESIS_SECTION_LABELS,
+  ANAMNESIS_VERSION,
   APA_REFERENCES,
   CASE_STATUSES,
   CASE_STATUS_LABELS,
@@ -26,11 +33,18 @@ import {
   LIKERT_SCALE_LABELS,
   LIKERT_TOTAL_POINTS,
   SEXES,
+  SHOT_DEFINITIONS,
+  SHOT_KEYS,
   STATISTICAL_TEST_LABELS,
+  DELIVERY_CHANNELS,
+  DELIVERY_CHANNEL_LABELS,
+  PRESCRIPTION_STATUSES,
+  PRESCRIPTION_STATUS_LABELS,
   STUDY_MODES,
   STUDY_MODE_LABELS,
   THESIS_METADATA,
   USER_ROLES,
+  USER_ROLE_GROUPS,
   USER_ROLE_LABELS,
   WORK_SHIFTS,
   WORK_SHIFT_LABELS,
@@ -47,10 +61,31 @@ import {
 @ApiTags('meta')
 @Controller('meta')
 export class MetaController {
+  constructor(
+    private readonly dataSource: DataSource,
+    private readonly questions: QuestionsService,
+    private readonly prescriptions: PrescriptionsService,
+  ) {}
+
+  /**
+   * El catálogo CIE-10 se lee de la BASE y no de una constante.
+   *
+   * Es el único catálogo del sistema que un mantenedor puede ampliar sin desplegar: la sección 3
+   * confina el prototipo al acné, pero el conjunto de diferenciales que una clínica necesita
+   * emitir cambia con la práctica, y obligar a una migración por cada código nuevo garantizaría
+   * que nadie los agregue.
+   */
+  private async icd10Codes(): Promise<Array<{ code: string; name: string }>> {
+    const rows = await this.dataSource.query<Array<{ codigo: string; nombre: string }>>(
+      `SELECT "codigo", "nombre" FROM "cie10" ORDER BY "orden" ASC`,
+    );
+    return rows.map((row) => ({ code: row.codigo, name: row.nombre }));
+  }
+
   @Public()
   @Get('catalogs')
   @ApiOperation({ summary: 'Catálogos del dominio: escalas, roles, indicadores e instrumentos.' })
-  catalogs(): Record<string, unknown> {
+  async catalogs(): Promise<Record<string, unknown>> {
     return {
       thesis: THESIS_METADATA,
       disclaimer: CLINICAL_DISCLAIMER,
@@ -71,7 +106,19 @@ export class MetaController {
       studyModes: { values: STUDY_MODES, labels: STUDY_MODE_LABELS },
       caseStatuses: { values: CASE_STATUSES, labels: CASE_STATUS_LABELS },
       workShifts: { values: WORK_SHIFTS, labels: WORK_SHIFT_LABELS },
-      roles: { values: USER_ROLES, labels: USER_ROLE_LABELS },
+      // Proceso clínico. No alimenta ningún indicador: el portal los necesita para pintar la
+      // validación y la receta sin duplicar las listas del dominio.
+      prescriptionStatuses: {
+        values: PRESCRIPTION_STATUSES,
+        labels: PRESCRIPTION_STATUS_LABELS,
+      },
+      deliveryChannels: {
+        values: DELIVERY_CHANNELS,
+        labels: DELIVERY_CHANNEL_LABELS,
+        simulated: this.prescriptions.simulatedChannels(),
+      },
+      icd10: await this.icd10Codes(),
+      roles: { values: USER_ROLES, labels: USER_ROLE_LABELS, groups: USER_ROLE_GROUPS },
 
       indicators: {
         keys: INDICATORS,
@@ -93,6 +140,19 @@ export class MetaController {
         items: LIKERT_ITEMS,
         scale: LIKERT_SCALE_LABELS,
         totalPoints: LIKERT_TOTAL_POINTS,
+      },
+
+      // Intake instruments. Served here for the same reason as the Likert: the wording is the one
+      // the clinic uses with patients, and the portal must render it rather than paraphrase it.
+      anamnesis: {
+        version: ANAMNESIS_VERSION,
+        sections: ANAMNESIS_SECTIONS,
+        sectionLabels: ANAMNESIS_SECTION_LABELS,
+        questions: await this.questions.catalogue(),
+      },
+      shots: {
+        keys: SHOT_KEYS,
+        definitions: SHOT_DEFINITIONS,
       },
     };
   }

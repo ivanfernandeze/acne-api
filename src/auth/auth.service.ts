@@ -2,7 +2,6 @@ import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 
 import { EncryptionService } from 'src/common/crypto/encryption.service';
-import { iiaValue } from 'src/common/domain';
 import type { JwtPayload } from 'src/common/interfaces/authenticated-user';
 import { APP_CONFIG, type AppConfig } from 'src/config/configuration';
 import type { User } from 'src/users/user.entity';
@@ -62,7 +61,6 @@ export class AuthService {
       email: user.email,
       fullName: user.fullName,
       role: user.role,
-      studyMode: user.studyMode,
     };
 
     const [accessToken, refreshToken] = await Promise.all([
@@ -85,8 +83,6 @@ export class AuthService {
         email: user.email,
         fullName: user.fullName,
         role: user.role,
-        studyMode: user.studyMode,
-        iia: iiaValue(user.studyMode),
       },
     };
   }

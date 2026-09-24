@@ -1,7 +1,10 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { AnamnesisModule } from 'src/anamnesis/anamnesis.module';
 import { AuditModule } from 'src/audit/audit.module';
+import { CaptureModule } from 'src/capture/capture.module';
+import { SessionsModule } from 'src/sessions/sessions.module';
 import { DiagnosesModule } from 'src/diagnoses/diagnoses.module';
 import { ImagesModule } from 'src/images/images.module';
 import { InferenceModule } from 'src/inference/inference.module';
@@ -19,6 +22,9 @@ import { CasesService } from './cases.service';
     InferenceModule,
     StudyModule,
     DiagnosesModule,
+    CaptureModule,
+    SessionsModule,
+    AnamnesisModule,
     AuditModule,
   ],
   controllers: [CasesController],

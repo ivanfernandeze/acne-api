@@ -3,10 +3,19 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 
 import { ClinicalCase } from 'src/cases/case.entity';
-import type { IgaClass, StudyMode } from 'src/common/domain';
+import { AnamnesisService } from 'src/anamnesis/anamnesis.service';
+import {
+  anamnesisImageMismatch,
+  describeMissingShots,
+  type IgaClass,
+  type StudyMode,
+} from 'src/common/domain';
+import { ImagesService } from 'src/images/images.service';
+import { InferenceService } from 'src/inference/inference.service';
 import { AiInference } from 'src/inference/ai-inference.entity';
 import { SessionsService } from 'src/sessions/sessions.service';
 import { ReviewTimingService } from 'src/study/review-timing.service';
+import { User } from 'src/users/user.entity';
 
 import { Diagnosis } from './diagnosis.entity';
 import type { Anexo5RowDto, DiagnosisDto, SubmitDiagnosisDto } from './dto/diagnosis.dto';
@@ -26,6 +35,9 @@ export class DiagnosesService {
     @InjectRepository(AiInference) private readonly inferences: Repository<AiInference>,
     private readonly reviewTiming: ReviewTimingService,
     private readonly sessions: SessionsService,
+    private readonly images: ImagesService,
+    private readonly anamnesis: AnamnesisService,
+    private readonly inferenceService: InferenceService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -37,6 +49,10 @@ export class DiagnosesService {
   ): Promise<DiagnosisDto> {
     const clinicalCase = await this.cases.findOne({ where: { id: caseId } });
     if (clinicalCase === null) throw new NotFoundException(`No existe el caso ${caseId}.`);
+    // A diagnosis on an incomplete photographic protocol is the measurement OE2 must not take:
+    // the specialist would be grading a face seen from one side only.
+    const missing = await this.images.missingRequiredShots(caseId);
+    if (missing.length > 0) throw new BadRequestException(describeMissingShots(missing));
     // One diagnosis per case AND per condition. The same case is deliberately diagnosed twice —
     // once in pretest and once in postest — because that is what makes it its own control; what
     // must never happen is two diagnoses under the SAME condition, which would make the pairing
@@ -52,10 +68,36 @@ export class DiagnosesService {
     const inference =
       studyMode === 'postest'
         ? await this.inferences.findOne({
-            where: { caseId, status: 'succeeded' },
+            where: { caseId, status: 'exitoso' },
             order: { createdAt: 'DESC' },
           })
         : null;
+
+    // A diagnosis signed over a photograph the model reads as clean while the history describes
+    // active lesions is a diagnosis over the wrong evidence — unless the specialist looked and
+    // says otherwise. The decision stays theirs (RNF-06); what is not allowed is not deciding.
+    if (inference !== null) {
+      const analysis = await this.inferenceService.caseAnalysis(caseId);
+      const mismatch = anamnesisImageMismatch(
+        analysis.igaClass ?? inference.igaClass,
+        await this.anamnesis.answersForCase(caseId),
+      );
+      if (mismatch.length > 0) {
+        if (dto.mismatchAcknowledged !== true) {
+          throw new BadRequestException(
+            'La sugerencia de la IA y la anamnesis se contradicen: ' +
+              mismatch.join(' ') +
+              ' Revise la fotografía o el cuestionario; si mantiene el diagnóstico, marque que ' +
+              'revisó la fotografía e indique el motivo.',
+          );
+        }
+        if ((dto.mismatchReason ?? '').trim().length < 10) {
+          throw new BadRequestException(
+            'Indique por qué mantiene el diagnóstico pese a la incongruencia (mínimo 10 caracteres).',
+          );
+        }
+      }
+    }
 
     // `agreement` is frozen against the consensus label of the lot, which is what makes pretest
     // and postest comparable in RF-OE2-05. With no consensus label there is nothing to compare.
@@ -81,13 +123,17 @@ export class DiagnosesService {
           agreement,
           aiSuggestionAccepted,
           aiInferenceId: inference?.id ?? null,
+          definitiveDiagnosis: dto.definitiveDiagnosis?.trim() ?? null,
+          icd10Code: dto.icd10Code ?? null,
+          patientNotes: dto.patientNotes?.trim() ?? null,
+          internalNotes: dto.internalNotes?.trim() ?? null,
           notes: dto.notes ?? null,
         }),
       );
 
       await manager
         .getRepository(ClinicalCase)
-        .update({ id: caseId }, { status: 'diagnosed' });
+        .update({ id: caseId }, { status: 'diagnosticado' });
 
       return diagnosis;
     });
@@ -97,7 +143,7 @@ export class DiagnosesService {
     const timing = await this.reviewTiming.stop(caseId, studyMode);
 
     // OE4: count the case towards NCR of the professional's open journey, if any.
-    const sessionId = await this.sessions.countReviewedCase(userId);
+    const sessionId = await this.sessions.countCompletedCase(userId);
     if (sessionId !== null && clinicalCase.workSessionId === null) {
       await this.cases.update({ id: caseId }, { workSessionId: sessionId });
     }
@@ -126,22 +172,22 @@ export class DiagnosesService {
   async anexo5Rows(studyMode: StudyMode | null, includeSynthetic: boolean): Promise<Anexo5RowDto[]> {
     const query = this.repository
       .createQueryBuilder('d')
-      .innerJoin(ClinicalCase, 'c', 'c.id = d.case_id')
-      .leftJoin(AiInference, 'ai', 'ai.id = d.ai_inference_id')
-      .leftJoin('users', 'u', 'u.id = d.user_id')
-      .select('d.created_at', 'createdAt')
-      .addSelect('d.iga_class', 'referenceDiagnosis')
-      .addSelect('d.study_mode', 'studyMode')
-      .addSelect('c.case_code', 'caseCode')
-      .addSelect('c.ground_truth_iga', 'groundTruth')
-      .addSelect('c.is_synthetic', 'isSynthetic')
-      .addSelect('ai.iga_class', 'aiDiagnosis')
+      .innerJoin(ClinicalCase, 'c', 'c.id = d.caseId')
+      .leftJoin(AiInference, 'ai', 'ai.id = d.aiInferenceId')
+      .leftJoin(User, 'u', 'u.id = d.userId')
+      .select('d.createdAt', 'createdAt')
+      .addSelect('d.igaClass', 'referenceDiagnosis')
+      .addSelect('d.studyMode', 'studyMode')
+      .addSelect('c.caseCode', 'caseCode')
+      .addSelect('c.groundTruthIga', 'groundTruth')
+      .addSelect('c.isSynthetic', 'isSynthetic')
+      .addSelect('ai.igaClass', 'aiDiagnosis')
       .addSelect('ai.confidence', 'aiConfidence')
-      .addSelect('u.full_name', 'professional')
-      .orderBy('d.created_at', 'ASC');
+      .addSelect('u.fullName', 'professional')
+      .orderBy('d.createdAt', 'ASC');
 
-    if (studyMode !== null) query.andWhere('d.study_mode = :studyMode', { studyMode });
-    if (!includeSynthetic) query.andWhere('c.is_synthetic = false');
+    if (studyMode !== null) query.andWhere('d.studyMode = :studyMode', { studyMode });
+    if (!includeSynthetic) query.andWhere('c.isSynthetic = false');
 
     const raw = await query.getRawMany<RawAnexo5Row>();
 
@@ -205,6 +251,10 @@ export class DiagnosesService {
       agreement: diagnosis.agreement,
       aiSuggestionAccepted: diagnosis.aiSuggestionAccepted,
       aiInferenceId: diagnosis.aiInferenceId,
+      definitiveDiagnosis: diagnosis.definitiveDiagnosis,
+      icd10Code: diagnosis.icd10Code,
+      patientNotes: diagnosis.patientNotes,
+      internalNotes: diagnosis.internalNotes,
       notes: diagnosis.notes,
       createdAt: diagnosis.createdAt.toISOString(),
       reviewMinutes: durationSeconds === null ? null : durationSeconds / 60,

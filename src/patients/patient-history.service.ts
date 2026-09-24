@@ -2,8 +2,16 @@ import { Inject, Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
+import { AnamnesisService } from 'src/anamnesis/anamnesis.service';
 import { SignedUrlService } from 'src/common/crypto/signed-url.service';
-import { IGA_ORDINAL, type CaseStatus, type IgaClass, type StudyMode } from 'src/common/domain';
+import {
+  AI_VIEWER_ROLES,
+  IGA_ORDINAL,
+  type CaseStatus,
+  type IgaClass,
+  type ShotKey,
+  type StudyMode,
+} from 'src/common/domain';
 import type { AuthenticatedUser } from 'src/common/interfaces/authenticated-user';
 import { APP_CONFIG, type AppConfig } from 'src/config/configuration';
 import type { CaseImageDto } from 'src/images/dto/image.dto';
@@ -29,6 +37,7 @@ import type { PatientResponseDto } from './dto/patient.dto';
 export class PatientHistoryService {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly anamnesisService: AnamnesisService,
     private readonly signedUrl: SignedUrlService,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
@@ -38,19 +47,19 @@ export class PatientHistoryService {
     user: AuthenticatedUser,
     includeSynthetic: boolean,
   ): Promise<PatientHistoryDto> {
-    // The AI block follows the REQUESTER's condition, exactly as the case view does: during the
-    // pretest pass the physician must not glimpse the model's opinion, not even in a history
-    // screen (RF-TR-01).
-    const aiVisible = user.studyMode !== 'pretest';
+    // The AI block follows the REQUESTER's role and condition, exactly as the case view does:
+    // during the pretest pass the physician must not glimpse the model's opinion, not even in a
+    // history screen, and the intake desk never sees it at all (RF-TR-01, RF-TR-02).
+    const aiVisible = AI_VIEWER_ROLES.includes(user.role);
 
     const cases = await this.dataSource.query<RawCase[]>(
-      `SELECT c."id", c."case_code" AS "caseCode", c."status", c."study_mode" AS "studyMode",
-              c."ground_truth_iga" AS "groundTruthIga", c."is_synthetic" AS "isSynthetic",
-              c."created_at" AS "createdAt", c."closed_at" AS "closedAt"
-         FROM "cases" c
-        WHERE c."patient_id" = $1
-          AND ($2::boolean OR c."is_synthetic" = false)
-        ORDER BY c."created_at" ASC`,
+      `SELECT c."id", c."codigo_caso" AS "caseCode", c."estado_codigo" AS "status", c."modo_estudio_codigo" AS "studyMode",
+              c."clase_iga_referencia" AS "groundTruthIga", c."es_sintetico" AS "isSynthetic",
+              c."creado_en" AS "createdAt", c."cerrado_en" AS "closedAt"
+         FROM "casos" c
+        WHERE c."paciente_id" = $1
+          AND ($2::boolean OR c."es_sintetico" = false)
+        ORDER BY c."creado_en" ASC`,
       [patient.id, includeSynthetic],
     );
 
@@ -62,46 +71,56 @@ export class PatientHistoryService {
 
     const [diagnoses, timings, inferences, images] = await Promise.all([
       this.dataSource.query<RawDiagnosis[]>(
-        `SELECT d."id", d."case_id" AS "caseId", d."study_mode" AS "studyMode",
-                d."iga_class" AS "igaClass", d."gags_score" AS "gagsScore", d."notes",
-                d."created_at" AS "createdAt", u."full_name" AS "professional"
-           FROM "diagnoses" d
-           JOIN "users" u ON u."id" = d."user_id"
-          WHERE d."case_id" = ANY($1)
-          ORDER BY d."created_at" ASC`,
+        `SELECT d."id", d."caso_id" AS "caseId", d."modo_estudio_codigo" AS "studyMode",
+                d."clase_iga_codigo" AS "igaClass", d."puntaje_gags" AS "gagsScore", d."notas",
+                d."creado_en" AS "createdAt", u."nombre_completo" AS "professional"
+           FROM "diagnosticos" d
+           JOIN "usuarios" u ON u."id" = d."usuario_id"
+          WHERE d."caso_id" = ANY($1)
+          ORDER BY d."creado_en" ASC`,
         [caseIds],
       ),
       this.dataSource.query<RawTiming[]>(
-        `SELECT t."case_id" AS "caseId", t."study_mode" AS "studyMode", t."t0",
-                t."duration_seconds" AS "durationSeconds", t."valid"
-           FROM "review_timings" t
-          WHERE t."case_id" = ANY($1)
+        `SELECT t."caso_id" AS "caseId", t."modo_estudio_codigo" AS "studyMode", t."t0",
+                t."duracion_segundos" AS "durationSeconds", t."valido"
+           FROM "cronometrajes_revision" t
+          WHERE t."caso_id" = ANY($1)
           ORDER BY t."t0" ASC`,
         [caseIds],
       ),
       aiVisible
         ? this.dataSource.query<RawInference[]>(
-            `SELECT DISTINCT ON (i."case_id")
-                    i."case_id" AS "caseId", i."iga_class" AS "igaClass", i."confidence",
-                    i."model_version" AS "modelVersion", i."model_backend" AS "modelBackend",
-                    i."created_at" AS "createdAt"
-               FROM "ai_inferences" i
-              WHERE i."case_id" = ANY($1) AND i."status" = 'succeeded'
-              ORDER BY i."case_id", i."created_at" DESC`,
+            `SELECT DISTINCT ON (i."caso_id")
+                    i."id" AS "inferenceId",
+                    i."caso_id" AS "caseId", i."clase_iga_codigo" AS "igaClass", i."confianza",
+                    i."version_modelo" AS "modelVersion", i."backend_modelo" AS "modelBackend",
+                    i."creado_en" AS "createdAt"
+               FROM "inferencias_ia" i
+              WHERE i."caso_id" = ANY($1) AND i."estado_codigo" = 'exitoso'
+              ORDER BY i."caso_id", i."creado_en" DESC`,
             [caseIds],
           )
         : Promise.resolve([] as RawInference[]),
       this.dataSource.query<RawImage[]>(
-        `SELECT im."id", im."case_id" AS "caseId", im."mime_type" AS "mimeType",
-                im."width", im."height", im."size_bytes" AS "sizeBytes", im."sha256",
-                im."encrypted", im."is_heatmap" AS "isHeatmap", im."created_at" AS "createdAt"
-           FROM "case_images" im
-          WHERE im."case_id" = ANY($1)
-            AND ($2::boolean OR im."is_heatmap" = false)
-          ORDER BY im."created_at" ASC`,
+        `SELECT im."id", im."caso_id" AS "caseId", im."tipo_mime" AS "mimeType",
+                im."ancho", im."alto", im."tamano_bytes" AS "sizeBytes", im."sha256",
+                im."cifrada", im."es_mapa_calor" AS "isHeatmap", im."toma_codigo" AS "shotKey",
+                im."creado_en" AS "createdAt"
+           FROM "imagenes_caso" im
+          WHERE im."caso_id" = ANY($1)
+            AND ($2::boolean OR im."es_mapa_calor" = false)
+          ORDER BY im."creado_en" ASC`,
         [caseIds, aiVisible],
       ),
     ]);
+
+    // The anamnesis is NOT gated by study mode: it must look identical in pretest and postest, or
+    // the paired contrast would be measuring "anamnesis + IA" instead of the intervention alone.
+    const anamnesis = await this.anamnesisService.summariesForCases(caseIds);
+
+    // Se pide DESPUÉS y no dentro del `Promise.all`: la valoración cuelga de la inferencia, y sus
+    // identificadores no se conocen hasta que la consulta anterior vuelve.
+    const assessments = await this.assessmentsFor(inferences.map((i) => i.inferenceId));
 
     const apiPrefix = `/${this.config.globalPrefix}`;
     const timeline: HistoryEntryDto[] = cases.map((row) => {
@@ -153,6 +172,7 @@ export class PatientHistoryService {
                 modelVersion: inference.modelVersion,
                 modelBackend: inference.modelBackend,
                 createdAt: new Date(inference.createdAt).toISOString(),
+                assessment: assessments.get(inference.inferenceId) ?? null,
               } satisfies HistoryInferenceDto),
         images: images
           .filter((im) => im.caseId === row.id)
@@ -167,14 +187,63 @@ export class PatientHistoryService {
               sha256: im.sha256,
               encrypted: im.encrypted,
               isHeatmap: im.isHeatmap,
+              shotKey: im.shotKey,
               createdAt: new Date(im.createdAt).toISOString(),
               url: this.signedUrl.buildUrl(apiPrefix, im.id, user.id),
             }),
           ),
+        anamnesis: anamnesis.get(row.id) ?? null,
       };
     });
 
     return { patient, summary: this.summarise(timeline), timeline };
+  }
+
+  /**
+   * Las lecturas razonadas de un puñado de inferencias, indexadas por inferencia.
+   *
+   * Dos consultas y no una por visita: la cabecera de la valoración y sus renglones ordenados. Un
+   * `ANY($1)` sobre una lista corta cuesta lo mismo que sobre una sola, y el historial de un
+   * paciente con doce visitas haría veinticuatro viajes a la base por nada.
+   */
+  private async assessmentsFor(
+    inferenceIds: string[],
+  ): Promise<Map<string, HistoryInferenceDto['assessment']>> {
+    const result = new Map<string, HistoryInferenceDto['assessment']>();
+    if (inferenceIds.length === 0) return result;
+
+    const [headers, details] = await Promise.all([
+      this.dataSource.query<Array<{ inferenceId: string; summary: string; rationale: string }>>(
+        `SELECT v."inferencia_id" AS "inferenceId", v."resumen" AS "summary",
+                v."fundamento_severidad" AS "rationale"
+           FROM "valoraciones_inferencia" v
+          WHERE v."inferencia_id" = ANY($1)`,
+        [inferenceIds],
+      ),
+      this.dataSource.query<Array<{ inferenceId: string; type: string; text: string }>>(
+        `SELECT d."inferencia_id" AS "inferenceId", d."tipo_codigo" AS "type", d."texto" AS "text"
+           FROM "detalles_valoracion" d
+          WHERE d."inferencia_id" = ANY($1)
+          ORDER BY d."orden" ASC`,
+        [inferenceIds],
+      ),
+    ]);
+
+    for (const header of headers) {
+      const own = details.filter((detail) => detail.inferenceId === header.inferenceId);
+      const listOf = (type: string): string[] =>
+        own.filter((detail) => detail.type === type).map((detail) => detail.text);
+      result.set(header.inferenceId, {
+        summary: header.summary,
+        severityRationale: header.rationale,
+        lesionTypes: listOf('lesion'),
+        affectedZones: listOf('zona'),
+        differentials: listOf('diferencial'),
+        considerations: listOf('consideracion'),
+        anamnesisFlags: listOf('bandera_anamnesis'),
+      });
+    }
+    return result;
   }
 
   private summarise(timeline: HistoryEntryDto[]): PatientHistorySummaryDto {
@@ -197,7 +266,7 @@ export class PatientHistoryService {
 
     return {
       totalCases: timeline.length,
-      closedCases: timeline.filter((entry) => entry.status === 'closed').length,
+      closedCases: timeline.filter((entry) => entry.status === 'cerrado').length,
       firstVisitAt: timeline[0]?.createdAt ?? null,
       lastVisitAt: timeline.at(-1)?.createdAt ?? null,
       firstSeverity: first,
@@ -260,6 +329,7 @@ interface RawTiming {
 }
 
 interface RawInference {
+  inferenceId: string;
   caseId: string;
   igaClass: IgaClass | null;
   confidence: number | null;
@@ -278,5 +348,6 @@ interface RawImage {
   sha256: string;
   encrypted: boolean;
   isHeatmap: boolean;
+  shotKey: ShotKey | null;
   createdAt: string;
 }

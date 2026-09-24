@@ -3,6 +3,9 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { AuditModule } from 'src/audit/audit.module';
 import { ClinicalCase } from 'src/cases/case.entity';
+import { AnamnesisModule } from 'src/anamnesis/anamnesis.module';
+import { ImagesModule } from 'src/images/images.module';
+import { InferenceModule } from 'src/inference/inference.module';
 import { AiInference } from 'src/inference/ai-inference.entity';
 import { SessionsModule } from 'src/sessions/sessions.module';
 import { StudyModule } from 'src/study/study.module';
@@ -17,6 +20,9 @@ import { Diagnosis } from './diagnosis.entity';
     TypeOrmModule.forFeature([Diagnosis, ClinicalCase, AiInference]),
     StudyModule,
     SessionsModule,
+    ImagesModule,
+    AnamnesisModule,
+    InferenceModule,
     AuditModule,
   ],
   controllers: [DiagnosesController],

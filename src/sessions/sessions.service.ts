@@ -63,11 +63,21 @@ export class SessionsService {
   }
 
   /**
-   * Increments NCR for the professional's open journey, if any.
-   * Returns the journey id so the case can be linked to it, or `null` when no journey is open —
-   * reviewing without an open journey is allowed, it simply contributes nothing to TCAD.
+   * Suma uno al NCR de la jornada abierta de quien acaba de completar una unidad de trabajo.
+   *
+   * Qué cuenta como «una unidad» depende del puesto, y por eso hay dos llamadores:
+   *
+   *  - el especialista suma al FIRMAR un diagnóstico (`diagnoses.service`);
+   *  - el mostrador suma al ABRIR un caso (`cases.service`), que es su trabajo terminado.
+   *
+   * Las dos cifras viven en la misma columna porque las dos son «casos que saqué adelante en esta
+   * jornada», pero NO se mezclan en el contraste: `pairedTcad` filtra por rol, porque OE4 mide
+   * capacidad de atención DIAGNÓSTICA y promediar ambas compararía peras con manzanas.
+   *
+   * Devuelve el id de la jornada para poder vincularle el caso, o `null` si no hay ninguna abierta:
+   * trabajar sin jornada está permitido, simplemente no aporta a TCAD.
    */
-  async countReviewedCase(userId: string): Promise<string | null> {
+  async countCompletedCase(userId: string): Promise<string | null> {
     const session = await this.findActive(userId);
     if (session === null) return null;
     await this.repository.increment({ id: session.id }, 'casesReviewed', 1);

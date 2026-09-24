@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger'
 
 import { AuditService } from 'src/audit/audit.service';
 import { CurrentUser, Roles } from 'src/common/decorators';
+import { ANALYSIS_ROLES, DIAGNOSING_ROLES, STUDY_ROLES, SYSTEM_MEASUREMENT_MODE } from 'src/common/domain';
 import type { StudyMode } from 'src/common/domain';
 import type {
   AuthenticatedRequest,
@@ -23,7 +24,7 @@ export class DiagnosesController {
   ) {}
 
   @Post('case/:caseId')
-  @Roles('dermatologo', 'residente')
+  @Roles(...DIAGNOSING_ROLES)
   @ApiOperation({
     summary: 'Emite el diagnóstico definitivo del especialista y cierra la medición.',
     description:
@@ -37,7 +38,7 @@ export class DiagnosesController {
     @CurrentUser() user: AuthenticatedUser,
     @Req() request: AuthenticatedRequest,
   ): Promise<DiagnosisDto> {
-    const diagnosis = await this.diagnosesService.submit(caseId, dto, user.id, user.studyMode);
+    const diagnosis = await this.diagnosesService.submit(caseId, dto, user.id, SYSTEM_MEASUREMENT_MODE);
     await this.auditService.record(
       user,
       {
@@ -47,8 +48,12 @@ export class DiagnosesController {
         metadata: {
           caseId,
           igaClass: dto.igaClass,
-          studyMode: user.studyMode,
+          studyMode: SYSTEM_MEASUREMENT_MODE,
           reviewMinutes: diagnosis.reviewMinutes,
+          // Only present when the specialist overrode an anamnesis ↔ image mismatch (RNF-05).
+          ...(dto.mismatchAcknowledged === true
+            ? { mismatchAcknowledged: true, mismatchReason: dto.mismatchReason ?? '' }
+            : {}),
         },
       },
       request,
@@ -57,6 +62,7 @@ export class DiagnosesController {
   }
 
   @Get('case/:caseId')
+  @Roles(...STUDY_ROLES)
   @ApiOperation({ summary: 'Lista los diagnósticos emitidos sobre un caso.' })
   async findByCase(@Param('caseId', ParseUUIDPipe) caseId: string): Promise<DiagnosisDto[]> {
     const diagnoses = await this.diagnosesService.findByCase(caseId);
@@ -64,6 +70,7 @@ export class DiagnosesController {
   }
 
   @Get('anexo-5')
+  @Roles(...ANALYSIS_ROLES)
   @ApiQuery({ name: 'studyMode', required: false })
   @ApiQuery({ name: 'includeSynthetic', required: false, type: Boolean })
   @ApiOperation({

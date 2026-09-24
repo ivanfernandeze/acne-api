@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger'
 
 import { AuditService } from 'src/audit/audit.service';
 import { CurrentUser, Roles } from 'src/common/decorators';
-import { LIKERT_ITEMS, LIKERT_SCALE_LABELS, LIKERT_TOTAL_POINTS } from 'src/common/domain';
+import { ANALYSIS_ROLES, LIKERT_ITEMS, LIKERT_SCALE_LABELS, LIKERT_TOTAL_POINTS, SURVEY_ROLES, SYSTEM_MEASUREMENT_MODE } from 'src/common/domain';
 import type {
   AuthenticatedRequest,
   AuthenticatedUser,
@@ -28,6 +28,9 @@ export class SurveysController {
   ) {}
 
   @Get('instrument')
+  // Abierto a quien lo responde Y a quien lo analiza: atarlo a STUDY_ROLES dejaba al técnico sin
+  // poder leer el cuestionario que ahora tiene que contestar.
+  @Roles(...SURVEY_ROLES, ...ANALYSIS_ROLES)
   @ApiOperation({
     summary: 'Devuelve el instrumento del Anexo 6 tal como fue validado.',
     description:
@@ -47,20 +50,21 @@ export class SurveysController {
   }
 
   @Get('status')
+  @Roles(...SURVEY_ROLES, ...ANALYSIS_ROLES)
   @ApiOperation({ summary: 'Indica si corresponde aplicar el cuestionario al usuario (RF-OE3-02).' })
   async status(@CurrentUser() user: AuthenticatedUser): Promise<SurveyStatusDto> {
     return this.surveysService.status(user.id);
   }
 
   @Post()
-  @Roles('dermatologo', 'residente')
+  @Roles(...SURVEY_ROLES)
   @ApiOperation({ summary: 'Registra las 8 respuestas Likert y calcula TSP del encuestado.' })
   async submit(
     @Body() dto: SubmitSurveyDto,
     @CurrentUser() user: AuthenticatedUser,
     @Req() request: AuthenticatedRequest,
   ): Promise<SurveyResponseSummaryDto> {
-    const response = await this.surveysService.submit(user.id, user.studyMode, dto);
+    const response = await this.surveysService.submit(user.id, SYSTEM_MEASUREMENT_MODE, dto);
     await this.auditService.record(
       user,
       {
@@ -75,6 +79,7 @@ export class SurveysController {
   }
 
   @Get('summary')
+  @Roles(...ANALYSIS_ROLES)
   @ApiQuery({ name: 'includeSynthetic', required: false, type: Boolean })
   @ApiOperation({ summary: 'TSP por ítem y global, con la alerta de meta (RF-OE3-03, RF-OE3-04).' })
   async summary(@Query('includeSynthetic') includeSynthetic?: string): Promise<SurveySummaryDto> {
@@ -82,7 +87,7 @@ export class SurveysController {
   }
 
   @Get()
-  @Roles('admin', 'evaluador_estadistico')
+  @Roles(...ANALYSIS_ROLES)
   @ApiQuery({ name: 'includeSynthetic', required: false, type: Boolean })
   @ApiOperation({ summary: 'Lista las respuestas registradas.' })
   async findAll(

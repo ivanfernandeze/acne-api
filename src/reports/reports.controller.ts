@@ -4,6 +4,7 @@ import type { Response } from 'express';
 
 import { AuditService } from 'src/audit/audit.service';
 import { CurrentUser, Roles } from 'src/common/decorators';
+import { ANALYSIS_ROLES } from 'src/common/domain';
 import type {
   AuthenticatedRequest,
   AuthenticatedUser,
@@ -22,6 +23,7 @@ export class ReportsController {
   ) {}
 
   @Get()
+  @Roles(...ANALYSIS_ROLES)
   @ApiOperation({ summary: 'Lista los reportes disponibles.' })
   list(): Array<{ name: ReportName; filename: string; objective: string }> {
     return [
@@ -41,6 +43,7 @@ export class ReportsController {
   }
 
   @Get(':report/preview')
+  @Roles(...ANALYSIS_ROLES)
   @Header('Content-Type', 'text/html; charset=utf-8')
   @ApiParam({ name: 'report', enum: REPORT_NAMES })
   @ApiQuery({ name: 'includeSynthetic', required: false, type: Boolean })
@@ -61,7 +64,7 @@ export class ReportsController {
   }
 
   @Get(':report/pdf')
-  @Roles('admin', 'evaluador_estadistico', 'dermatologo')
+  @Roles(...ANALYSIS_ROLES)
   @ApiParam({ name: 'report', enum: REPORT_NAMES })
   @ApiQuery({ name: 'includeSynthetic', required: false, type: Boolean })
   @ApiOperation({

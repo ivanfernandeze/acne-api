@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiParam, ApiQuery, ApiTags } from '@nestj
 
 import { AuditService } from 'src/audit/audit.service';
 import { CurrentUser, Roles } from 'src/common/decorators';
-import { INDICATORS, type ExperimentalMode, type IndicatorKey } from 'src/common/domain';
+import { ANALYSIS_ROLES, CONTRAST_ROLES, INDICATORS, type ExperimentalMode, type IndicatorKey } from 'src/common/domain';
 import type {
   AuthenticatedRequest,
   AuthenticatedUser,
@@ -28,6 +28,7 @@ export class IndicatorsController {
   ) {}
 
   @Get('dashboard')
+  @Roles(...ANALYSIS_ROLES)
   @ApiQuery({ name: 'includeSynthetic', required: false, type: Boolean })
   @ApiOperation({
     summary: 'TRM, TPD, TSP y TCAD por modo, con comparativa y alertas de meta.',
@@ -40,6 +41,7 @@ export class IndicatorsController {
   }
 
   @Get('comparison/:indicator')
+  @Roles(...ANALYSIS_ROLES)
   @ApiParam({ name: 'indicator', enum: INDICATORS })
   @ApiQuery({ name: 'includeSynthetic', required: false, type: Boolean })
   @ApiOperation({ summary: 'Comparativa pretest vs postest de un indicador.' })
@@ -53,6 +55,7 @@ export class IndicatorsController {
   }
 
   @Get('classification/:studyMode')
+  @Roles(...ANALYSIS_ROLES)
   @ApiParam({ name: 'studyMode', enum: ['pretest', 'postest'] })
   @ApiQuery({ name: 'includeSynthetic', required: false, type: Boolean })
   @ApiOperation({
@@ -69,6 +72,7 @@ export class IndicatorsController {
   }
 
   @Get('by-professional/:indicator')
+  @Roles(...ANALYSIS_ROLES)
   @ApiParam({ name: 'indicator', enum: INDICATORS })
   @ApiQuery({ name: 'includeSynthetic', required: false, type: Boolean })
   @ApiOperation({ summary: 'Desglose por profesional para los boxplots comparativos (RF-OE4-04).' })
@@ -82,7 +86,7 @@ export class IndicatorsController {
   }
 
   @Post('snapshot')
-  @Roles('admin', 'evaluador_estadistico')
+  @Roles(...CONTRAST_ROLES)
   @ApiQuery({ name: 'includeSynthetic', required: false, type: Boolean })
   @ApiOperation({
     summary: 'Congela el estado actual de los indicadores como log inmutable (RNF-05).',

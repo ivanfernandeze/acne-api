@@ -11,6 +11,13 @@ export interface AuditInput {
   entityType: string;
   entityId?: string | null;
   metadata?: Record<string, unknown> | null;
+  /**
+   * Who to hold responsible when the request carried no principal of its own — a photograph
+   * arriving through a mobile capture session, authorised by its QR token rather than by a login.
+   * Without it the trail would record an anonymous write to a clinical record, which is exactly the
+   * kind of entry RNF-02 exists to prevent.
+   */
+  actorId?: string | null;
 }
 
 /**
@@ -36,7 +43,7 @@ export class AuditService {
     try {
       await this.repository.save(
         this.repository.create({
-          userId: user?.id ?? null,
+          userId: user?.id ?? input.actorId ?? null,
           userEmail: user?.email ?? null,
           action: input.action,
           entityType: input.entityType,
@@ -55,10 +62,30 @@ export class AuditService {
 
   async findRecent(limit = 100, action?: string): Promise<AuditLog[]> {
     return this.repository.find({
-      where: action === undefined ? {} : { action },
+      where: action === undefined || action === '' ? {} : { action },
       order: { createdAt: 'DESC' },
       take: Math.min(limit, 500),
     });
+  }
+
+  /**
+   * The action names that actually occur in the trail, with how many times each one does.
+   *
+   * Derived from the rows rather than from a constant on purpose. The catalogue of actions is not
+   * declared anywhere — each one is a string literal at its own call site — so a hard-coded list
+   * would have gone stale the first time an endpoint was added, and the filter would then hide
+   * exactly the events nobody knew to look for.
+   */
+  async actionSummary(): Promise<Array<{ action: string; count: number }>> {
+    const rows = await this.repository
+      .createQueryBuilder('log')
+      .select('log.action', 'action')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('log.action')
+      .orderBy('log.action', 'ASC')
+      .getRawMany<{ action: string; count: string }>();
+
+    return rows.map((row) => ({ action: row.action, count: Number(row.count) }));
   }
 
   private resolveIp(request: AuthenticatedRequest): string | null {

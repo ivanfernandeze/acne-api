@@ -11,6 +11,47 @@ import { APP_CONFIG, type AppConfig } from 'src/config/configuration';
  * of section 4: no hand-written duplicate of another service's schema.
  */
 
+/**
+ * The anamnesis that travels with the photograph.
+ *
+ * Carries no identity. RF-TR-03 reserves the patient's name and document for the treating
+ * dermatologist, and neither is needed to read a photograph — so neither is sent, least of all to a
+ * backend that may forward it to a third party.
+ */
+export interface ClinicalContextPayload {
+  age: number | null;
+  sex: string | null;
+  phototype: string | null;
+  answers: Array<{ question: string; answer: string }>;
+}
+
+/** The reasoned reading behind a grade. Null when the backend only looks at pixels. */
+export interface ClinicalAssessment {
+  summary: string;
+  lesion_types: string[];
+  affected_zones: string[];
+  severity_rationale: string;
+  differentials: string[];
+  considerations: string[];
+  anamnesis_flags: string[];
+}
+
+/** One model's vote inside the ensemble (section 8.1, revision 17/09/2026). */
+export interface MemberPrediction {
+  tag: string;
+  model_name: string;
+  model_version: string;
+  weights_checksum: string;
+  weight: number;
+  iga_class: IgaClass;
+  confidence: number;
+  class_probs: Record<string, number>;
+  heatmap_png_base64: string | null;
+  latency_ms: number;
+}
+
+export type EnsembleAgreement = 'unanime' | 'mayoria' | 'discrepancia';
+
 export interface InferSingleResponse {
   prediction: {
     iga_class: IgaClass;
@@ -18,18 +59,43 @@ export interface InferSingleResponse {
     class_probs: Record<string, number>;
   };
   gags_secondary: { grade: GagsGrade; score: number };
+  assessment: ClinicalAssessment | null;
   /** Grad-CAM overlay, base64-encoded PNG (section 8.4). */
   heatmap_png_base64: string | null;
   latency_ms: number;
   model_version: string;
-  model_backend: 'stub' | 'torch';
+  model_backend: 'stub' | 'torch' | 'gemini';
   weights_checksum: string | null;
   seed: number;
+  /** Individual readings when the engine serves an ensemble; empty with a single model. */
+  members?: MemberPrediction[];
+  agreement?: EnsembleAgreement | null;
+}
+
+/**
+ * Verdict on whether an image may be filed as a clinical photograph.
+ *
+ * There is deliberately NOTHING clinical here — no severity, no lesion count, no IGA class. The
+ * check runs at intake, which happens in both experimental conditions, so anything it revealed
+ * about the disease would put the intervention into the pretest and break RF-TR-01.
+ */
+export interface ImageScreenResponse {
+  acceptable: boolean;
+  /** False when the active backend cannot examine images. `acceptable` then means "not checked". */
+  checked: boolean;
+  subject: string;
+  /** Quality problems. They warn; on their own they never block. */
+  issues: string[];
+  reason: string;
+  latency_ms: number;
+  model_backend: 'stub' | 'torch' | 'gemini';
 }
 
 export interface IiaCheckResponse {
   operational: boolean;
-  model_backend: 'stub' | 'torch';
+  model_backend: 'stub' | 'torch' | 'gemini';
+  /** Why the check passes or fails; `operational` alone cannot distinguish a stub from an LLM. */
+  model_kind: 'stub' | 'cnn' | 'llm_externo';
   version: string;
   weights_checksum: string | null;
   latency_median_24h_ms: number | null;
@@ -98,11 +164,24 @@ export class AiEngineClient {
 
   constructor(@Inject(APP_CONFIG) private readonly config: AppConfig) {}
 
-  async inferSingle(imageBase64: string, mimeType: string, caseCode: string): Promise<InferSingleResponse> {
+  async inferSingle(
+    imageBase64: string,
+    mimeType: string,
+    caseCode: string,
+    clinicalContext: ClinicalContextPayload | null = null,
+  ): Promise<InferSingleResponse> {
     return this.post<InferSingleResponse>('/infer/single', {
       image_base64: imageBase64,
       mime_type: mimeType,
       case_code: caseCode,
+      clinical_context: clinicalContext,
+    });
+  }
+
+  async screenImage(imageBase64: string, mimeType: string): Promise<ImageScreenResponse> {
+    return this.post<ImageScreenResponse>('/image/screen', {
+      image_base64: imageBase64,
+      mime_type: mimeType,
     });
   }
 

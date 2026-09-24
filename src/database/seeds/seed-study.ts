@@ -84,8 +84,8 @@ async function storeSyntheticImage(
   await writeFile(target, encryptBuffer(plaintext, keyHex));
 
   const [image] = await dataSource.query<Array<{ id: string }>>(
-    `INSERT INTO "case_images"
-       ("case_id","storage_key","storage_driver","mime_type","width","height","size_bytes","sha256","encrypted","is_heatmap")
+    `INSERT INTO "imagenes_caso"
+       ("caso_id","clave_almacen","driver_almacen","tipo_mime","ancho","alto","tamano_bytes","sha256","cifrada","es_mapa_calor")
      VALUES ($1,$2,'local','image/png',256,256,$3,$4,true,$5) RETURNING "id"`,
     [
       caseId,
@@ -109,6 +109,60 @@ const FIRST_NAMES: Readonly<Record<'femenino' | 'masculino', readonly string[]>>
 };
 const LAST_NAMES = ['Quispe', 'Vargas', 'Rojas', 'Chávez', 'Mendoza', 'Flores', 'Castillo', 'Ramos'];
 
+/**
+ * Los cuatro dermatólogos del censo de demostración.
+ *
+ * Los crea el seeder y no `seed:admin` porque no son personal de la clínica: son relleno para que
+ * la demostración pueda ejecutar las cuatro hipótesis. HE₃ contrasta la satisfacción de CADA
+ * profesional contra una línea base y Shapiro-Wilk necesita al menos tres respondientes, así que
+ * con un solo dermatólogo el contraste no llega a correr; HE₄ correría, pero midiendo la capacidad
+ * de atención de una sola persona, que no es lo que OE4 dice medir.
+ *
+ * Van marcados `es_sintetico`, igual que los treinta casos que revisan, de modo que borrar los
+ * datos de demostración se los lleva y el recuento de personal del estudio no queda inflado.
+ *
+ * Sin contraseña utilizable: se les asigna un hash con una sal aleatoria que nadie conoce. Son
+ * sujetos de datos, no cuentas por las que alguien deba poder entrar.
+ *
+ * Los nombres son deliberadamente impersonales. Con nombres verosímiles —y peor, repitiendo el de
+ * la dermatóloga real— la tabla de personal mostraba dos «Dra. Ana Torres Vega» y las etiquetas de
+ * los pares de HE₄ nombraban a alguien que no existe como si fuera plantilla del centro.
+ */
+const SYNTHETIC_PROFESSIONALS = [
+  { email: 'demo1@sintetico.local', fullName: 'Profesional de demostración 1' },
+  { email: 'demo2@sintetico.local', fullName: 'Profesional de demostración 2' },
+  { email: 'demo3@sintetico.local', fullName: 'Profesional de demostración 3' },
+  { email: 'demo4@sintetico.local', fullName: 'Profesional de demostración 4' },
+] as const;
+
+async function seedProfessionals(): Promise<Array<{ id: string; full_name: string }>> {
+  const created: Array<{ id: string; full_name: string }> = [];
+
+  for (const professional of SYNTHETIC_PROFESSIONALS) {
+    const unusable = `scrypt$${randomBytes(16).toString('hex')}$${randomBytes(64).toString('hex')}`;
+    const [row] = await dataSource.query<Array<{ id: string }>>(
+      `INSERT INTO "usuarios"
+         ("correo","hash_contrasena","nombre_completo","rol_codigo","modo_estudio_codigo","especialidad","activo","es_sintetico")
+       VALUES ($1,$2,$3,'dermatologo','pretest','Dermatología clínica',false,true)
+       RETURNING "id"`,
+      [professional.email, unusable, professional.fullName],
+    );
+    if (row !== undefined) created.push({ id: row.id, full_name: professional.fullName });
+  }
+
+  console.log(`Creados ${created.length} dermatólogos sintéticos para el censo.`);
+  return created;
+}
+
+/** El borrado completo del censo, en orden de dependencia. Se imprime, nunca se ejecuta solo. */
+function printCleanup(): void {
+  console.log('  DELETE FROM "casos" WHERE "es_sintetico" = true;');
+  console.log('  DELETE FROM "jornadas_trabajo" WHERE "es_sintetico" = true;');
+  console.log('  DELETE FROM "respuestas_encuesta" WHERE "es_sintetico" = true;');
+  console.log('  DELETE FROM "pacientes" WHERE "codigo_paciente" LIKE \'PAC-%-S%\';');
+  console.log('  DELETE FROM "usuarios" WHERE "es_sintetico" = true;');
+}
+
 async function main(): Promise<void> {
   const encryptionKey = process.env.ENCRYPTION_KEY;
   if (encryptionKey === undefined || !/^[0-9a-fA-F]{64}$/.test(encryptionKey)) {
@@ -126,25 +180,17 @@ async function main(): Promise<void> {
 
   await dataSource.initialize();
 
-  const professionals = await dataSource.query<Array<{ id: string; full_name: string }>>(
-    `SELECT "id", "full_name" FROM "users" WHERE "role" IN ('dermatologo','residente') ORDER BY "full_name" LIMIT 4`,
-  );
-
-  if (professionals.length === 0) {
-    throw new Error('No hay profesionales registrados. Ejecute primero: pnpm seed:admin');
-  }
-
   const existing = await dataSource.query<Array<{ n: number }>>(
-    `SELECT COUNT(*)::int AS n FROM "cases" WHERE "is_synthetic" = true`,
+    `SELECT COUNT(*)::int AS n FROM "casos" WHERE "es_sintetico" = true`,
   );
   if ((existing[0]?.n ?? 0) > 0) {
     console.log('Ya existen casos sintéticos. Elimínelos antes de volver a sembrar:');
-    console.log('  DELETE FROM "cases" WHERE "is_synthetic" = true;');
-    console.log('  DELETE FROM "work_sessions" WHERE "is_synthetic" = true;');
-    console.log('  DELETE FROM "survey_responses" WHERE "is_synthetic" = true;');
+    printCleanup();
     await dataSource.destroy();
     return;
   }
+
+  const professionals = await seedProfessionals();
 
   const baseDate = new Date('2026-03-02T09:00:00.000Z');
   let patientSequence = 0;
@@ -178,7 +224,7 @@ async function main(): Promise<void> {
     const fullName = `${pick(FIRST_NAMES[sex])} ${pick(LAST_NAMES)} ${pick(LAST_NAMES)}`;
 
     const [patient] = await dataSource.query<Array<{ id: string }>>(
-      `INSERT INTO "patients" ("patient_code","encrypted_full_name","birth_date","sex","fitzpatrick_phototype","consent_accepted_at")
+      `INSERT INTO "pacientes" ("codigo_paciente","nombre_completo_cifrado","fecha_nacimiento","sexo_codigo","fototipo_codigo","consentimiento_en")
        VALUES ($1,$2,$3,$4,$5,now()) RETURNING "id"`,
       [
         patientCode,
@@ -222,15 +268,15 @@ async function main(): Promise<void> {
       );
 
       const [clinicalCase] = await dataSource.query<Array<{ id: string }>>(
-        `INSERT INTO "cases" ("case_code","patient_id","assigned_user_id","study_mode","status","ground_truth_iga","is_synthetic","created_at","closed_at")
-         VALUES ($1,$2,$3,'pretest','closed',$4,true,$5,now()) RETURNING "id"`,
+        `INSERT INTO "casos" ("codigo_caso","paciente_id","usuario_asignado_id","modo_estudio_codigo","estado_codigo","clase_iga_referencia","es_sintetico","creado_en","cerrado_en")
+         VALUES ($1,$2,$3,'pretest','cerrado',$4,true,$5,now()) RETURNING "id"`,
         [caseCode, patient.id, professional.id, groundTruth, visitDate],
       );
       if (clinicalCase === undefined) continue;
 
       const imageId = await storeSyntheticImage(
         clinicalCase.id,
-        buildSyntheticFaceImage(rng),
+        buildSyntheticFaceImage(rng, groundTruth),
         false,
         encryptionKey,
         storageRoot,
@@ -244,7 +290,7 @@ async function main(): Promise<void> {
       const pretestEnd = new Date(pretestStart.getTime() + pretestMinutes * 60_000);
 
       await dataSource.query(
-        `INSERT INTO "review_timings" ("case_id","user_id","study_mode","t0","t1","duration_seconds","valid")
+        `INSERT INTO "cronometrajes_revision" ("caso_id","usuario_id","modo_estudio_codigo","t0","t1","duracion_segundos","valido")
          VALUES ($1,$2,'pretest',$3,$4,$5,true)`,
         [
           clinicalCase.id,
@@ -260,7 +306,7 @@ async function main(): Promise<void> {
       const manualCorrect = rng() < 0.7;
       const manualClass = manualCorrect ? groundTruth : adjacentClass(groundTruth);
       await dataSource.query(
-        `INSERT INTO "diagnoses" ("case_id","user_id","study_mode","iga_class","agreement","created_at")
+        `INSERT INTO "diagnosticos" ("caso_id","usuario_id","modo_estudio_codigo","clase_iga_codigo","acuerdo","creado_en")
          VALUES ($1,$2,'pretest',$3,$4,$5)`,
         [
           clinicalCase.id,
@@ -277,7 +323,7 @@ async function main(): Promise<void> {
       const postestEnd = new Date(postestStart.getTime() + postestMinutes * 60_000);
 
       await dataSource.query(
-        `INSERT INTO "review_timings" ("case_id","user_id","study_mode","t0","t1","duration_seconds","valid")
+        `INSERT INTO "cronometrajes_revision" ("caso_id","usuario_id","modo_estudio_codigo","t0","t1","duracion_segundos","valido")
          VALUES ($1,$2,'postest',$3,$4,$5,true)`,
         [
           clinicalCase.id,
@@ -303,18 +349,17 @@ async function main(): Promise<void> {
       );
 
       const [inference] = await dataSource.query<Array<{ id: string }>>(
-        `INSERT INTO "ai_inferences"
-           ("case_id","image_id","status","iga_class","confidence","class_probs","gags_grade","gags_score",
-            "latency_ms","model_version","model_backend","seed","heatmap_image_id","created_at")
-         VALUES ($1,$2,'succeeded',$3,$4,$5,$6,$7,$8,'stub-deterministic-v0','stub',42,$9,$10)
+        `INSERT INTO "inferencias_ia"
+           ("caso_id","imagen_id","estado_codigo","clase_iga_codigo","confianza","grado_gags_codigo","puntaje_gags",
+            "latencia_ms","version_modelo","backend_modelo","semilla","imagen_mapa_calor","creado_en")
+         VALUES ($1,$2,'exitoso',$3,$4,$5,$6,$7,'stub-deterministic-v0','stub',42,$8,$9)
          RETURNING "id"`,
         [
           clinicalCase.id,
           imageId,
           aiClass,
           Number(confidence.toFixed(4)),
-          JSON.stringify(buildProbabilities(aiClass, confidence)),
-          'moderate',
+          'moderado',
           Math.round(10 + rng() * 25),
           Math.round(600 + rng() * 900),
           heatmapId,
@@ -322,13 +367,34 @@ async function main(): Promise<void> {
         ],
       );
 
+      // El vector de probabilidades vive en su propia tabla desde la normalizacion: una fila por
+      // clase IGA. Sin estas filas la ficha del caso mostraria la clase sugerida sin el respaldo
+      // que el medico necesita para aceptarla o rechazarla.
+      const inferenceId = inference?.id;
+      if (inferenceId !== undefined) {
+        // Las cinco clases en UNA sentencia. Sembrar contra la base remota del estudio con una
+        // consulta por clase eran 150 viajes de ida y vuelta extra, suficientes para que la
+        // conexión cayera a mitad del seeder y dejara el censo a medias.
+        const probabilities = Object.entries(buildProbabilities(aiClass, confidence));
+        await dataSource.query(
+          `INSERT INTO "probabilidades_inferencia" ("inferencia_id","clase_iga_codigo","probabilidad")
+           SELECT $1, c."clase", c."prob"
+             FROM UNNEST($2::varchar[], $3::float8[]) AS c("clase","prob")`,
+          [
+            inferenceId,
+            probabilities.map(([igaClass]) => igaClass),
+            probabilities.map(([, probability]) => probability),
+          ],
+        );
+      }
+
       // With the suggestion visible, the specialist keeps it most of the time and corrects it when
       // it is wrong roughly half the time — the assisted-decision pattern OE2 is meant to capture.
       const assistedCorrect = aiCorrect || rng() < 0.5;
       const assistedClass = assistedCorrect ? groundTruth : aiClass;
       await dataSource.query(
-        `INSERT INTO "diagnoses"
-           ("case_id","user_id","study_mode","iga_class","agreement","ai_suggestion_accepted","ai_inference_id","created_at")
+        `INSERT INTO "diagnosticos"
+           ("caso_id","usuario_id","modo_estudio_codigo","clase_iga_codigo","acuerdo","sugerencia_aceptada","inferencia_id","creado_en")
          VALUES ($1,$2,'postest',$3,$4,$5,$6,$7)`,
         [
           clinicalCase.id,
@@ -362,8 +428,8 @@ async function main(): Promise<void> {
         const ended = new Date(started.getTime() + hours * 3_600_000);
 
         await dataSource.query(
-          `INSERT INTO "work_sessions"
-             ("user_id","study_mode","shift","started_at","ended_at","declared_duration_hours","cases_reviewed","tcad","is_synthetic")
+          `INSERT INTO "jornadas_trabajo"
+             ("usuario_id","modo_estudio_codigo","turno_codigo","iniciada_en","finalizada_en","horas_declaradas","casos_revisados","tcad","es_sintetico")
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true)`,
           [
             professional.id,
@@ -388,8 +454,8 @@ async function main(): Promise<void> {
     const meanLikert = pointsObtained / scores.length;
 
     const [response] = await dataSource.query<Array<{ id: string }>>(
-      `INSERT INTO "survey_responses"
-         ("user_id","study_mode","points_obtained","total_points","tsp_pct","mean_likert","postest_cases_at_submission","is_synthetic")
+      `INSERT INTO "respuestas_encuesta"
+         ("usuario_id","modo_estudio_codigo","puntos_obtenidos","puntos_totales","tsp_pct","promedio_likert","casos_postest_al_enviar","es_sintetico")
        VALUES ($1,'postest',$2,40,$3,$4,15,true) RETURNING "id"`,
       [professional.id, pointsObtained, Number(((pointsObtained / 40) * 100).toFixed(4)), Number(meanLikert.toFixed(4))],
     );
@@ -397,7 +463,7 @@ async function main(): Promise<void> {
 
     for (let item = 1; item <= 8; item++) {
       await dataSource.query(
-        `INSERT INTO "survey_answers" ("response_id","item_number","score") VALUES ($1,$2,$3)`,
+        `INSERT INTO "detalle_respuestas_encuesta" ("respuesta_id","item_numero","puntaje") VALUES ($1,$2,$3)`,
         [response.id, item, scores[item - 1] ?? 4],
       );
     }
@@ -408,9 +474,7 @@ async function main(): Promise<void> {
   console.log('\nListo. Datos sintéticos marcados con is_synthetic = true.');
   console.log('Para verlos en el portal y en los reportes use includeSynthetic=true.');
   console.log('Para eliminarlos:');
-  console.log('  DELETE FROM "cases" WHERE "is_synthetic" = true;');
-  console.log('  DELETE FROM "work_sessions" WHERE "is_synthetic" = true;');
-  console.log('  DELETE FROM "survey_responses" WHERE "is_synthetic" = true;');
+  printCleanup();
 }
 
 /** Misclassification on an ordinal scale lands next door, not at random. */
