@@ -76,10 +76,13 @@ export class DiagnosesService {
     // A diagnosis signed over a photograph the model reads as clean while the history describes
     // active lesions is a diagnosis over the wrong evidence — unless the specialist looked and
     // says otherwise. The decision stays theirs (RNF-06); what is not allowed is not deciding.
+    // The case-level class, not the latest single row: that row may be a view the gate declared
+    // not-acne, which carries no class even though the case has a suggestion.
+    const analysis = inference !== null ? await this.inferenceService.caseAnalysis(caseId) : null;
+    const suggestedClass = analysis?.igaClass ?? inference?.igaClass ?? null;
     if (inference !== null) {
-      const analysis = await this.inferenceService.caseAnalysis(caseId);
       const mismatch = anamnesisImageMismatch(
-        analysis.igaClass ?? inference.igaClass,
+        suggestedClass,
         await this.anamnesis.answersForCase(caseId),
       );
       if (mismatch.length > 0) {
@@ -108,9 +111,9 @@ export class DiagnosesService {
           ? 'correcto'
           : 'incorrecto';
 
+    // No suggestion (every view not-acne) → nothing to accept or reject: null.
     const aiSuggestionAccepted =
-      dto.aiSuggestionAccepted ??
-      (inference?.igaClass == null ? null : dto.igaClass === inference.igaClass);
+      suggestedClass === null ? null : (dto.aiSuggestionAccepted ?? dto.igaClass === suggestedClass);
 
     const saved = await this.dataSource.transaction(async (manager) => {
       const diagnosis = await manager.getRepository(Diagnosis).save(

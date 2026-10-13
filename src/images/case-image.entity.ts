@@ -9,7 +9,7 @@ import {
 } from 'typeorm';
 
 import { ClinicalCase } from 'src/cases/case.entity';
-import type { ShotKey } from 'src/common/domain';
+import type { HeadPose, ShotKey } from 'src/common/domain';
 
 /**
  * A clinical facial image attached to a case — table `imagenes_caso`.
@@ -71,6 +71,14 @@ export class CaseImage {
    */
   @Column({ type: 'varchar', length: 24, name: 'toma_codigo', nullable: true })
   shotKey: ShotKey | null;
+
+  /**
+   * Head pose the admission screener measured (`frontal`, `nariz_derecha`, `nariz_izquierda`,
+   * `indeterminado`). Kept so a later upload or relabel can be checked against the other profile
+   * without decrypting and re-screening this one. Null when nothing was measured.
+   */
+  @Column({ type: 'varchar', length: 24, name: 'orientacion_detectada', nullable: true })
+  pose: HeadPose | null;
 
   @CreateDateColumn({ type: 'timestamptz', name: 'creado_en' })
   createdAt: Date;

@@ -112,7 +112,8 @@ export class ImagesController {
     description:
       'Para rotular como perfil una foto que se subió como vista general sin volver a subirla. ' +
       'No toca los bytes ni afecta a inferencias o diagnósticos; solo la comprobación de tomas ' +
-      'obligatorias lee la etiqueta.',
+      'obligatorias lee la etiqueta. Responde 422 si la orientación medida al subirla no ' +
+      'corresponde a la toma nueva (p. ej. un rostro girado como «Vista general»).',
   })
   async relabel(
     @Param('id', ParseUUIDPipe) id: string,

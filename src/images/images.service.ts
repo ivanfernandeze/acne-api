@@ -14,7 +14,14 @@ import { Repository } from 'typeorm';
 import { EncryptionService } from 'src/common/crypto/encryption.service';
 import { APP_CONFIG, type AppConfig } from 'src/config/configuration';
 import { SignedUrlService } from 'src/common/crypto/signed-url.service';
-import { missingRequiredShots, type ShotKey } from 'src/common/domain';
+import {
+  checkShotView,
+  isHeadPose,
+  missingRequiredShots,
+  type HeadPose,
+  type ShotKey,
+  type ShotSibling,
+} from 'src/common/domain';
 import { readImageDimensions } from 'src/common/utils/image-dimensions';
 import { sniffImageType, type SniffedImageType } from 'src/common/utils/image-sniffer';
 import { AiEngineClient } from 'src/inference/ai-engine.client';
@@ -70,8 +77,38 @@ export class ImagesService {
     // The recorded mime type is the sniffed one, not the declared one.
     const mimeType = this.validate(file);
     const screening = await this.screen(file.buffer, mimeType);
-    const image = await this.store(caseId, file.buffer, mimeType, userId, false, shotKey);
-    return { image, warnings: screening };
+
+    const view = checkShotView(
+      shotKey,
+      screening.pose,
+      this.encryption.sha256(file.buffer),
+      await this.siblings(caseId),
+    );
+    if (view.rejection !== null) throw new UnprocessableEntityException(view.rejection);
+
+    const image = await this.store(
+      caseId,
+      file.buffer,
+      mimeType,
+      userId,
+      false,
+      shotKey,
+      screening.pose,
+    );
+    return { image, warnings: [...screening.warnings, ...view.warnings] };
+  }
+
+  /** The case's photographs as `checkShotView` reads them, oldest first. */
+  private async siblings(caseId: string, excludeId?: string): Promise<ShotSibling[]> {
+    const images = await this.findByCase(caseId, false);
+    return images
+      .filter((image) => image.id !== excludeId)
+      .map((image) => ({
+        id: image.id,
+        shotKey: image.shotKey,
+        sha256: image.sha256,
+        pose: image.pose,
+      }));
   }
 
   /**
@@ -89,19 +126,27 @@ export class ImagesService {
    * engine's verdict carries nothing clinical, so nothing about the disease leaks into the pretest
    * (RF-TR-01).
    *
-   * @returns quality warnings worth passing to the photographer. Never blocking on their own.
+   * @returns quality warnings worth passing to the photographer (never blocking on their own), and
+   *   the head pose when the engine measured one — null otherwise, which skips the pose rules.
    */
-  private async screen(buffer: Buffer, mimeType: string): Promise<string[]> {
-    if (!this.config.aiEngine.screenUploads) return [];
+  private async screen(
+    buffer: Buffer,
+    mimeType: string,
+  ): Promise<{ warnings: string[]; pose: HeadPose | null }> {
+    const unchecked: { warnings: string[]; pose: HeadPose | null } = { warnings: [], pose: null };
+    if (!this.config.aiEngine.screenUploads) return unchecked;
     try {
       const verdict = await this.aiEngine.screenImage(buffer.toString('base64'), mimeType);
-      if (!verdict.checked) return [];
+      if (!verdict.checked) return unchecked;
       if (!verdict.acceptable) {
         throw new UnprocessableEntityException(
           describeRejection(verdict.subject, verdict.reason),
         );
       }
-      return describeIssues(verdict.issues);
+      return {
+        warnings: describeIssues(verdict.issues),
+        pose: isHeadPose(verdict.pose) ? verdict.pose : null,
+      };
     } catch (error: unknown) {
       if (error instanceof UnprocessableEntityException) throw error;
       // Failing open is deliberate: a clinician looks at every photograph anyway, and refusing a
@@ -111,13 +156,13 @@ export class ImagesService {
         'No se pudo cribar la imagen; se admite sin verificar: ' +
           (error instanceof Error ? error.message : String(error)),
       );
-      return [];
+      return unchecked;
     }
   }
 
   /** Persists a Grad-CAM overlay produced by the engine (section 8.4). */
   async storeHeatmap(caseId: string, data: Buffer, mimeType: string): Promise<CaseImage> {
-    return this.store(caseId, data, mimeType, null, true, null);
+    return this.store(caseId, data, mimeType, null, true, null, null);
   }
 
   private async store(
@@ -127,6 +172,7 @@ export class ImagesService {
     userId: string | null,
     isHeatmap: boolean,
     shotKey: ShotKey | null,
+    pose: HeadPose | null,
   ): Promise<CaseImage> {
     const dimensions = readImageDimensions(plaintext);
     // The digest is of the PLAINTEXT, so integrity can be checked after decryption.
@@ -148,6 +194,7 @@ export class ImagesService {
       isHeatmap,
       uploadedBy: userId,
       shotKey,
+      pose,
     });
     return this.repository.save(image);
   }
@@ -166,12 +213,23 @@ export class ImagesService {
    * dos perfiles mal rotulados. Reetiquetar no toca los bytes ni el cifrado y no invalida nada que
    * dependa de la imagen (una inferencia mira píxeles, no la etiqueta), así que no tiene las
    * restricciones de `remove`. Un mapa de calor no es una toma y no se reetiqueta.
+   *
+   * Pasa por las mismas reglas de vista que la subida (`checkShotView`), con la orientación que se
+   * midió al subirla: reetiquetar no puede ser la puerta de atrás para archivar un perfil como
+   * vista general.
    */
   async relabel(imageId: string, shotKey: ShotKey): Promise<CaseImage> {
     const image = await this.findById(imageId);
     if (image.isHeatmap) {
       throw new BadRequestException('Un mapa de calor no es una toma del protocolo fotográfico.');
     }
+    const view = checkShotView(
+      shotKey,
+      image.pose,
+      image.sha256,
+      await this.siblings(image.caseId, image.id),
+    );
+    if (view.rejection !== null) throw new UnprocessableEntityException(view.rejection);
     await this.repository.update({ id: imageId }, { shotKey });
     image.shotKey = shotKey;
     return image;

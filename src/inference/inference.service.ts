@@ -14,6 +14,7 @@ import {
   REQUIRED_SHOT_KEYS,
   IGA_LABELS,
   aggregateViews,
+  caseVerdictOf,
   buildCaseReading,
   describeMissingShots,
   describeRule,
@@ -293,10 +294,17 @@ export class InferenceService implements OnModuleInit, OnModuleDestroy {
     }
 
     const done = views.filter((v) => v.inference.status === 'exitoso');
-    const counted = done.filter(
+    // A view the gate declared another condition has nothing to grade: it is left out of the
+    // suggestion. A healthy view DOES take part, as `sin_lesiones` (a clear cheek next to an
+    // affected one is clinically real). Only when no view is gradable does the case become
+    // `no_acne`; when every gradable view is healthy skin, `piel_sana`.
+    const noAcneViews = done.filter((v) => v.inference.verdict === 'no_acne').map((v) => v.imageId);
+    const graded = done.filter((v) => v.inference.verdict !== 'no_acne');
+    const caseVerdict = caseVerdictOf(done.map((v) => v.inference.verdict));
+    const counted = graded.filter(
       (v) => v.shotKey !== null && REQUIRED_SHOT_KEYS.includes(v.shotKey) && v.inference.classProbs !== null,
     );
-    const pool = counted.length > 0 ? counted : done.filter((v) => v.inference.classProbs !== null);
+    const pool = counted.length > 0 ? counted : graded.filter((v) => v.inference.classProbs !== null);
 
     const verdict = aggregateViews(
       pool.map((v) => ({
@@ -377,6 +385,8 @@ export class InferenceService implements OnModuleInit, OnModuleDestroy {
       range: verdict.range,
       selection,
       reading,
+      verdict: caseVerdict,
+      noAcneViews,
       completed: done.length,
       pending: views.filter((v) => v.inference.status === 'pendiente' || v.inference.status === 'ejecutando').length,
       failed: views.filter((v) => v.inference.status === 'fallido').length,
@@ -588,6 +598,17 @@ export class InferenceService implements OnModuleInit, OnModuleDestroy {
       memberHeatmaps.push(stored.id);
     }
 
+    // `no_acne` is a successful answer, not a failure: the gate looked and found nothing to grade.
+    // It is stored without class, GAGS or probabilities, and is never retried. `piel_sana` is
+    // stored like a graded reading: `sin_lesiones` with the gate's probability as its vector.
+    const verdict = result.verdict ?? 'acne';
+    const graded = verdict !== 'no_acne';
+    const prediction = graded ? result.prediction : null;
+    const gags = graded ? result.gags_secondary : null;
+    if (graded && (prediction === null || gags === null)) {
+      throw new Error(`El motor respondió «${verdict}» sin clase IGA ni GAGS: respuesta incompleta.`);
+    }
+
     // Cabecera e hijas en una sola transacción: una inferencia marcada exitosa cuyo vector de
     // probabilidades no llegó a escribirse le mostraría al médico una clase sin su respaldo.
     await this.dataSource.transaction(async (manager) => {
@@ -595,10 +616,13 @@ export class InferenceService implements OnModuleInit, OnModuleDestroy {
         { id: inference.id },
         {
           status: 'exitoso',
-          igaClass: result.prediction.iga_class,
-          confidence: result.prediction.confidence,
-          gagsGrade: result.gags_secondary.grade,
-          gagsScore: result.gags_secondary.score,
+          verdict,
+          acneProbability: result.acne_probability ?? null,
+          gateVersion: result.gate_version ?? null,
+          igaClass: prediction?.iga_class ?? null,
+          confidence: prediction?.confidence ?? null,
+          gagsGrade: gags?.grade ?? null,
+          gagsScore: gags?.score ?? null,
           heatmapImageId,
           latencyMs: result.latency_ms,
           modelVersion: result.model_version,
@@ -633,15 +657,17 @@ export class InferenceService implements OnModuleInit, OnModuleDestroy {
 
       const probabilities = manager.getRepository(InferenceProbability);
       await probabilities.delete({ inferenceId: inference.id });
-      await probabilities.insert(
-        Object.entries(result.prediction.class_probs)
-          .filter(([igaClass]) => isIgaClass(igaClass))
-          .map(([igaClass, probability]) => ({
-            inferenceId: inference.id,
-            igaClass: igaClass as IgaClass,
-            probability,
-          })),
-      );
+      if (prediction !== null) {
+        await probabilities.insert(
+          Object.entries(prediction.class_probs)
+            .filter(([igaClass]) => isIgaClass(igaClass))
+            .map(([igaClass, probability]) => ({
+              inferenceId: inference.id,
+              igaClass: igaClass as IgaClass,
+              probability,
+            })),
+        );
+      }
 
       // Un reintento sobre la misma fila reemplaza la lectura anterior; el CASCADE de
       // `detalles_valoracion` se lleva sus renglones.
@@ -752,6 +778,8 @@ export class InferenceService implements OnModuleInit, OnModuleDestroy {
       caseId: inference.caseId,
       imageId: inference.imageId,
       status: inference.status,
+      verdict: inference.verdict ?? 'acne',
+      acneProbability: inference.acneProbability ?? null,
       igaClass: inference.igaClass,
       confidence: inference.confidence,
       classProbs: toClassProbs(inference.probabilities),

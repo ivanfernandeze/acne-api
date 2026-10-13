@@ -320,6 +320,13 @@ export interface components {
              * @description Modelos que componen el ensemble servido, con versión y checksum de cada uno.
              */
             ensemble_members?: components["schemas"]["EnsembleMemberInfo"][];
+            /**
+             * Acne Gate Version
+             * @description Filtro acné / no acné previo a la graduación; null si no hay.
+             */
+            acne_gate_version?: string | null;
+            /** Acne Gate Checksum */
+            acne_gate_checksum?: string | null;
         };
         /**
          * ImageScreenRequest
@@ -374,6 +381,18 @@ export interface components {
              * @default
              */
             reason: string;
+            /**
+             * Pose
+             * @description Orientación de la cabeza (solo geometría). `nariz_*` es el lado de la IMAGEN hacia el que apunta la nariz, no el lado del paciente: una selfie espejada lo invierte.
+             * @default indeterminado
+             * @enum {string}
+             */
+            pose: "frontal" | "nariz_derecha" | "nariz_izquierda" | "indeterminado";
+            /**
+             * Yaw Ratio
+             * @description Desplazamiento de la nariz respecto al punto medio de los ojos, en fracción del ancho del rostro (positivo = hacia la derecha de la imagen). Null si no se midió.
+             */
+            yaw_ratio?: number | null;
             /** Latency Ms */
             latency_ms: number;
             /**
@@ -409,8 +428,45 @@ export interface components {
         };
         /** InferSingleResponse */
         InferSingleResponse: {
-            prediction: components["schemas"]["Prediction"];
-            gags_secondary: components["schemas"]["GagsSecondary"];
+            /**
+             * Verdict
+             * @description `acne`: se graduó con el ensemble IGA. `piel_sana`: el filtro previo vio piel sana (las pecas incluidas) y la sugerencia es `sin_lesiones` con la probabilidad DEL FILTRO; el ensemble no corrió (sin miembros ni Grad-CAM). `no_acne`: otra condición (vitíligo, psoriasis…); no se graduó y `prediction`, `gags_secondary` vienen nulos.
+             * @default acne
+             * @enum {string}
+             */
+            verdict: "acne" | "piel_sana" | "no_acne";
+            /**
+             * Gate Probabilities
+             * @description Probabilidad de cada etiqueta del filtro (acne, sana, otra); null sin filtro.
+             */
+            gate_probabilities?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Gate Checked
+             * @description Falso cuando no hay filtro de acné cargado: `verdict` es `acne` por defecto y no significa que se haya verificado nada.
+             * @default false
+             */
+            gate_checked: boolean;
+            /**
+             * Acne Probability
+             * @description Probabilidad de acné según el filtro.
+             */
+            acne_probability?: number | null;
+            /**
+             * Gate Threshold
+             * @description Umbral con el que se decidió `verdict`.
+             */
+            gate_threshold?: number | null;
+            /**
+             * Gate Version
+             * @description Versión del filtro de acné.
+             */
+            gate_version?: string | null;
+            /** @description Nulo solo cuando `verdict` es `no_acne`. Con `piel_sana` es `sin_lesiones` y `class_probs` lleva únicamente la probabilidad de piel sana según el filtro. */
+            prediction?: components["schemas"]["Prediction"] | null;
+            /** @description Nulo solo cuando `verdict` es `no_acne`. */
+            gags_secondary?: components["schemas"]["GagsSecondary"] | null;
             /** @description Lectura clínica razonada. Ausente cuando el backend solo mira píxeles. */
             assessment?: components["schemas"]["ClinicalAssessment"] | null;
             /**
@@ -433,7 +489,7 @@ export interface components {
             seed: number;
             /**
              * Members
-             * @description Lecturas individuales cuando el motor sirve un ensemble; `prediction` es la recomendación combinada (promedio de probabilidades ponderado por F1). Vacío con un solo modelo.
+             * @description Lecturas individuales cuando el motor sirve un ensemble; `prediction` es la recomendación combinada según ENSEMBLE_RULE (por defecto, la lectura íntegra del miembro más seguro; empate → mayor peso). Vacío con un solo modelo.
              */
             members?: components["schemas"]["MemberPredictionOut"][];
             /**

@@ -27,6 +27,7 @@
     "seed:admin": "ts-node -r tsconfig-paths/register src/database/seeds/seed-admin.ts",
     "seed:study": "ts-node -r tsconfig-paths/register src/database/seeds/seed-study.ts",
     "evaluate:backend": "ts-node -r tsconfig-paths/register src/scripts/evaluate-backend.ts",
+    "storage:to-minio": "ts-node -r tsconfig-paths/register src/scripts/migrate-storage-to-minio.ts",
     "openapi:export": "ts-node -r tsconfig-paths/register src/scripts/export-openapi.ts",
     "generate:ai-types": "openapi-typescript http://127.0.0.1:8000/openapi.json -o src/inference/ai-engine.schema.d.ts"
   },

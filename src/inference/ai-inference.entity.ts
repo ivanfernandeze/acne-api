@@ -12,7 +12,7 @@ import {
 
 import type { GagsGrade, IgaClass, ProcessStatus } from 'src/common/domain';
 
-import type { EnsembleAgreement } from './ai-engine.client';
+import type { AcneVerdict, EnsembleAgreement } from './ai-engine.client';
 import { ClinicalCase } from 'src/cases/case.entity';
 import { CaseImage } from 'src/images/case-image.entity';
 
@@ -80,6 +80,22 @@ export class AiInference {
 
   @Column({ type: 'varchar', length: 200, name: 'version_modelo' })
   modelVersion: string;
+
+  /**
+   * `no_acne` when the engine's gate decided the photograph does not show acne and did not grade
+   * it — `igaClass`, `confidence` and the GAGS fields then stay null on a SUCCESSFUL row: the model
+   * worked, and its answer is that there is nothing to grade.
+   */
+  @Column({ type: 'varchar', length: 12, name: 'veredicto_codigo', default: 'acne' })
+  verdict: AcneVerdict;
+
+  /** The gate's probability of acne; null when no gate was loaded. */
+  @Column({ type: 'double precision', name: 'probabilidad_acne', nullable: true })
+  acneProbability: number | null;
+
+  /** Version of the gate that decided the verdict; null when there was none. */
+  @Column({ type: 'varchar', length: 120, name: 'version_filtro', nullable: true })
+  gateVersion: string | null;
 
   /** How far the ensemble members agreed; null when a single model served. */
   @Column({ type: 'varchar', length: 16, name: 'acuerdo_codigo', nullable: true })

@@ -52,13 +52,32 @@ export interface MemberPrediction {
 
 export type EnsembleAgreement = 'unanime' | 'mayoria' | 'discrepancia';
 
+/**
+ * What the engine's gate saw before grading:
+ * - `acne`: graded by the IGA ensemble;
+ * - `piel_sana`: healthy skin (freckles included); the reading is `sin_lesiones` with the GATE's
+ *   probability, the ensemble did not run (no members, no Grad-CAM);
+ * - `no_acne`: another condition (vitiligo, psoriasis…); NOT graded.
+ */
+export type AcneVerdict = 'acne' | 'piel_sana' | 'no_acne';
+
 export interface InferSingleResponse {
+  /** Absent from engines older than the gate, which graded everything: read as `acne`. */
+  verdict?: AcneVerdict;
+  /** False when no gate is loaded: `verdict` is then `acne` by default, not by verification. */
+  gate_checked?: boolean;
+  acne_probability?: number | null;
+  gate_threshold?: number | null;
+  gate_version?: string | null;
+  /** Probability of each gate label (`acne`, `sana`, `otra`); null without a gate. */
+  gate_probabilities?: Record<string, number> | null;
+  /** Null only when `verdict` is `no_acne`. */
   prediction: {
     iga_class: IgaClass;
     confidence: number;
     class_probs: Record<string, number>;
-  };
-  gags_secondary: { grade: GagsGrade; score: number };
+  } | null;
+  gags_secondary: { grade: GagsGrade; score: number } | null;
   assessment: ClinicalAssessment | null;
   /** Grad-CAM overlay, base64-encoded PNG (section 8.4). */
   heatmap_png_base64: string | null;
@@ -87,6 +106,12 @@ export interface ImageScreenResponse {
   /** Quality problems. They warn; on their own they never block. */
   issues: string[];
   reason: string;
+  /**
+   * Head pose — geometry only. `nariz_*` is the side of the IMAGE the nose points to. Absent from
+   * engines older than the pose check.
+   */
+  pose?: 'frontal' | 'nariz_derecha' | 'nariz_izquierda' | 'indeterminado';
+  yaw_ratio?: number | null;
   latency_ms: number;
   model_backend: 'stub' | 'torch' | 'gemini';
 }

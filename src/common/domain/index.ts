@@ -13,6 +13,7 @@ export * from './prescription';
 export * from './roles';
 export * from './anamnesis';
 export * from './capture';
+export * from './shot-view';
 export * from './incongruence';
 export * from './reading';
 export * from './case-analysis';

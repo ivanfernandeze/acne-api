@@ -1,4 +1,4 @@
-import { aggregateViews, describeRule, type AnalysisView } from './case-analysis';
+import { aggregateViews, caseVerdictOf, describeRule, type AnalysisView } from './case-analysis';
 
 const view = (
   imageId: string,
@@ -69,5 +69,24 @@ describe('describeRule', () => {
     );
     const fallback = aggregateViews([view('general', 'leve', 0.3), view('perfil_derecho', 'severo', 0.5), view('perfil_izquierdo', 'moderado', 0.4)]);
     expect(describeRule(fallback, label, shotOf)).toMatch(/más seguros: perfil derecho → severo/);
+  });
+});
+
+describe('caseVerdictOf', () => {
+  it('is null until a view has finished', () => {
+    expect(caseVerdictOf([])).toBeNull();
+  });
+
+  it('is no_acne only when no view is gradable (another condition everywhere)', () => {
+    expect(caseVerdictOf(['no_acne', 'no_acne', 'no_acne'])).toBe('no_acne');
+  });
+
+  it('is piel_sana when every gradable view is healthy skin', () => {
+    expect(caseVerdictOf(['piel_sana', 'piel_sana', 'no_acne'])).toBe('piel_sana');
+  });
+
+  it('is acne as soon as one view was graded by the ensemble', () => {
+    // A clear cheek next to an affected one is clinically real: the acne view wins.
+    expect(caseVerdictOf(['piel_sana', 'acne', 'no_acne'])).toBe('acne');
   });
 });

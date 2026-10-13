@@ -99,6 +99,23 @@ export function aggregateViews(views: AnalysisView[]): AnalysisVerdict {
   };
 }
 
+/** What the engine's gate said about one view (see `AcneVerdict` of the engine client). */
+export type ViewVerdict = 'acne' | 'piel_sana' | 'no_acne';
+
+/**
+ * The case's verdict from its finished views.
+ *
+ * `no_acne` (another condition) views are left out of the suggestion; healthy-skin views take part
+ * as `sin_lesiones`. So: no finished view → `null`; no gradable view → `no_acne` (incongruence,
+ * nothing to suggest); every gradable view healthy → `piel_sana`; otherwise `acne`.
+ */
+export function caseVerdictOf(verdicts: readonly ViewVerdict[]): ViewVerdict | null {
+  if (verdicts.length === 0) return null;
+  const gradable = verdicts.filter((verdict) => verdict !== 'no_acne');
+  if (gradable.length === 0) return 'no_acne';
+  return gradable.every((verdict) => verdict === 'piel_sana') ? 'piel_sana' : 'acne';
+}
+
 /** One sentence for the physician: which rule produced the suggestion and from which views. */
 export function describeRule(verdict: AnalysisVerdict, shotLabel: (key: string | null) => string, viewShot: (imageId: string) => string | null): string {
   if (verdict.igaClass === null || verdict.rule === null) return '';

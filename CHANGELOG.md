@@ -5,6 +5,16 @@ versionado con [SemVer](https://semver.org/lang/es/).
 
 ## [No publicado]
 
+### Added — traslado del almacenamiento local a MinIO (24/09/2026)
+
+- **`pnpm storage:to-minio`** (`src/scripts/migrate-storage-to-minio.ts`): copia cada archivo de
+  `STORAGE_LOCAL_PATH` al bucket con la **misma clave**. La API lee por clave en el almacenamiento
+  activo, así que no hay que tocar `clave_almacen` ni `firma_ruta`. Los bytes viajan tal cual
+  (ciphertext AES-256-GCM). Es idempotente: omite lo que ya está con el mismo tamaño, verifica cada
+  objeto tras subirlo y nunca borra los archivos locales. `--dry-run` lista lo que subiría;
+  `--update-db` marca `imagenes_caso.driver_almacen = 'minio'`.
+- `.env.example` documenta `STORAGE_DRIVER=minio` y las variables `MINIO_*`.
+
 ### Fixed — PDF en Docker y migraciones al arrancar (23/09/2026)
 
 - La etapa de ejecución del `Dockerfile` deja la imagen fija `playwright:v1.48.2` e instala Chromium

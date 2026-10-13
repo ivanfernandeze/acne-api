@@ -14,6 +14,8 @@ import {
   type ShotKey,
 } from 'src/common/domain';
 
+import type { AcneVerdict } from '../ai-engine.client';
+
 /**
  * The reasoned reading behind a grade, as returned to the portal.
  *
@@ -62,6 +64,7 @@ export class AiInferenceMemberDto {
 }
 
 export const ENSEMBLE_AGREEMENTS = ['unanime', 'mayoria', 'discrepancia'] as const;
+export const ACNE_VERDICTS = ['acne', 'piel_sana', 'no_acne'] as const;
 
 /** One CNN prediction, as returned to the portal. Covers: OE2 (RF-OE2-01). */
 export class AiInferenceDto {
@@ -70,6 +73,21 @@ export class AiInferenceDto {
   @ApiProperty() imageId: string;
   @ApiProperty({ enum: PROCESS_STATUSES })
   status: ProcessStatus;
+  @ApiProperty({
+    enum: ACNE_VERDICTS,
+    description:
+      '`acne`: graduada por el ensemble IGA. `piel_sana`: el filtro vio piel sana (pecas ' +
+      'incluidas) y la lectura es `sin_lesiones` con la probabilidad DEL FILTRO; el ensemble no ' +
+      'corrió (sin miembros ni Grad-CAM). `no_acne`: otra condición (vitíligo, psoriasis…); no ' +
+      'se graduó y `igaClass`, `classProbs` y el GAGS son nulos aunque `status` sea `exitoso`.',
+  })
+  verdict: AcneVerdict;
+  @ApiProperty({
+    nullable: true,
+    type: Number,
+    description: 'Probabilidad de acné según el filtro; nula si el motor no tenía filtro.',
+  })
+  acneProbability: number | null;
   @ApiProperty({ nullable: true, enum: IGA_CLASSES }) igaClass: IgaClass | null;
   @ApiProperty({ nullable: true, type: Number }) confidence: number | null;
   @ApiProperty({
@@ -229,6 +247,23 @@ export class CaseAnalysisDto {
     description: 'Grado mínimo y máximo entre las tomas analizadas.',
   })
   range: { min: IgaClass; max: IgaClass } | null;
+  @ApiProperty({
+    enum: ACNE_VERDICTS,
+    nullable: true,
+    description:
+      'Veredicto del caso. `no_acne`: ninguna toma muestra acné ni piel sana (otra condición) y ' +
+      'no hay sugerencia de grado; el portal lo avisa como incongruencia. `piel_sana`: todas las ' +
+      'tomas graduables son piel sana y la sugerencia `sin_lesiones` viene del filtro. `acne`: ' +
+      'al menos una toma se graduó con el ensemble. Nulo mientras no termina ninguna toma.',
+  })
+  verdict: AcneVerdict | null;
+  @ApiProperty({
+    type: [String],
+    description:
+      'imageId de las tomas que el filtro declaró «otra condición». Quedan fuera de la sugerencia ' +
+      'del caso. Las tomas de piel sana SÍ participan, como `sin_lesiones`.',
+  })
+  noAcneViews: string[];
   @ApiProperty({ description: 'Tomas con inferencia terminada con éxito.' }) completed: number;
   @ApiProperty({ description: 'Tomas con inferencia pendiente o en ejecución.' }) pending: number;
   @ApiProperty({ description: 'Tomas cuya inferencia falló.' }) failed: number;
