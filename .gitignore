@@ -8,8 +8,10 @@ coverage/
 .env.*.local
 !.env.example
 
-storage/
-reports-output/
+# Encrypted photographs of the local storage driver. Anchored to the root: an unanchored
+# "storage/" also ignored src/storage/, the storage module itself, which never reached GitHub.
+/storage/
+/reports-output/
 logs/
 *.log
 
