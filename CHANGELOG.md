@@ -5,6 +5,63 @@ versionado con [SemVer](https://semver.org/lang/es/).
 
 ## [No publicado]
 
+> **Tras actualizar, ejecute `pnpm migration:run`**: esta tanda añade dos migraciones
+> (`SegundaOpinion1758400000000` y `OrigenVeredicto1758500000000`) y la API no las aplica sola fuera
+> de Docker (`RUN_MIGRATIONS=true`).
+
+### Added — segunda opinión y origen del veredicto (22/10/2026)
+
+- **Persistencia de la segunda opinión del motor** (verificación previa con Gemini, consultada solo
+  para las tomas que el filtro deja pasar como acné). Migración `SegundaOpinion1758400000000` en
+  `inferencias_ia`: `segunda_opinion_codigo` varchar(16) NULL con CHECK (`acne` | `piel_sana` |
+  `otra_condicion` | `indeterminado`), `segunda_opinion_condiciones` varchar(300) (nombres unidos por
+  «; »: texto para mostrar, nunca se agrega), `segunda_opinion_explicacion` varchar(400) y
+  `segunda_opinion_version` varchar(120).
+- **Origen del veredicto.** Migración `OrigenVeredicto1758500000000`: `veredicto_origen`
+  varchar(16) NOT NULL DEFAULT `'filtro'` con CHECK (`filtro` | `segunda_opinion`). Vale
+  `segunda_opinion` cuando la verificación previa vio otra condición y la toma no se graduó aunque el
+  filtro dijera acné.
+- `src/inference/second-opinion.ts` (`toSecondOpinionColumns`, `fromSecondOpinionColumns`): mapeo
+  entre la respuesta del motor, las cuatro columnas y el DTO (recorta a la longitud de cada columna).
+  `second-opinion.spec.ts`.
+- DTO: `AiInferenceDto.secondOpinion` (`SecondOpinionDto`: `label`, `conditions`, `explanation`,
+  `version`; nula si no se consultó) y `AiInferenceDto.verdictSource`.
+- `ai-engine.client.ts` y `ai-engine.schema.d.ts` (tipos regenerados del OpenAPI del motor):
+  `second_opinion`, `verdict_source`. Un motor anterior sin esos campos se lee como `filtro` y sin
+  segunda opinión.
+
+### Changed — agregación de las tomas en la sugerencia del caso (22/10/2026)
+
+- **`viewsForSuggestion`** (`common/domain/case-analysis.ts`): si alguna toma muestra acné, las
+  tomas de piel sana se **descartan** de la sugerencia. Su «confianza» es la probabilidad del filtro,
+  no un grado IGA, y ganaban siempre (una mejilla limpia al «100 %» vencía a una severa al 69 % y el
+  caso salía `sin_lesiones`). Solo si ninguna toma muestra acné, las sanas sostienen la sugerencia
+  (`piel_sana`). La regla de mayoría (y, si todas difieren, la toma más segura) no cambia.
+- `CaseAnalysisDto.healthyViewsSetAside`: `imageId` de las tomas sanas descartadas (el portal marca
+  su fila «Descartada»).
+- `CaseAnalysisDto.noAcneViews` incluye las tomas detenidas por el filtro **o** por la segunda
+  opinión (`verdictSource`).
+- Pruebas: `case-analysis.spec.ts` cubre el descarte. Total: **198** pruebas (jest).
+
+### Added — veredicto del filtro de acné (13/10–19/10/2026)
+
+- Migraciones `VeredictoAcne1758200000000` y `VeredictoPielSana1758300000000`:
+  `inferencias_ia.veredicto_codigo` (`acne` | `piel_sana` | `no_acne`), `probabilidad_acne` y
+  `version_filtro`. Una toma `no_acne` se guarda exitosa sin clase, GAGS ni Grad-CAM y no se
+  reintenta; `piel_sana` se guarda como lectura `sin_lesiones` con la probabilidad del filtro.
+- `caseVerdictOf` (`common/domain/case-analysis.ts`): veredicto del caso; las tomas `no_acne`
+  quedan fuera de la sugerencia y se informan en `CaseAnalysisDto.noAcneViews`.
+- `diagnoses.service.ts`: la aceptación de la sugerencia se compara con la clase del caso.
+
+### Added — validación de la vista de cada toma (01/10/2026)
+
+- `common/domain/shot-view.ts` (`checkShotView`), aplicada al subir y al cambiar la toma de una
+  foto. Rechaza (422): la misma fotografía en dos tomas, una «Vista general» girada, un perfil de
+  frente y los dos perfiles girados hacia el mismo lado. Advierte: perfil que parece del otro lado
+  (posible selfie espejada) y orientación indeterminada.
+- Migración `OrientacionDeTomas1758100000000`: `imagenes_caso.orientacion_detectada`, tomada del
+  cribado del motor.
+
 ### Added — traslado del almacenamiento local a MinIO (24/09/2026)
 
 - **`pnpm storage:to-minio`** (`src/scripts/migrate-storage-to-minio.ts`): copia cada archivo de

@@ -18,7 +18,8 @@ import { ReviewTimingService } from 'src/study/review-timing.service';
 import { User } from 'src/users/user.entity';
 
 import { Diagnosis } from './diagnosis.entity';
-import type { Anexo5RowDto, DiagnosisDto, SubmitDiagnosisDto } from './dto/diagnosis.dto';
+import type { Anexo5RowDto, CorrectDiagnosisDto, DiagnosisDto, SubmitDiagnosisDto } from './dto/diagnosis.dto';
+import { peruDate } from 'src/common/peru-date';
 
 /**
  * The specialist's judgement, and the moment the clinical measurement closes.
@@ -154,6 +155,12 @@ export class DiagnosesService {
     return this.toDto(saved, clinicalCase.caseCode, '', timing?.durationSeconds ?? null);
   }
 
+  async findOneOrFail(id: string): Promise<Diagnosis> {
+    const diagnosis = await this.repository.findOne({ where: { id } });
+    if (diagnosis === null) throw new NotFoundException(`No existe el diagnóstico ${id}.`);
+    return diagnosis;
+  }
+
   async findByCase(caseId: string): Promise<Diagnosis[]> {
     return this.repository.find({
       where: { caseId },
@@ -178,7 +185,8 @@ export class DiagnosesService {
       .innerJoin(ClinicalCase, 'c', 'c.id = d.caseId')
       .leftJoin(AiInference, 'ai', 'ai.id = d.aiInferenceId')
       .leftJoin(User, 'u', 'u.id = d.userId')
-      .select('d.createdAt', 'createdAt')
+      .select('d.id', 'diagnosisId')
+      .addSelect('d.createdAt', 'createdAt')
       .addSelect('d.igaClass', 'referenceDiagnosis')
       .addSelect('d.studyMode', 'studyMode')
       .addSelect('c.caseCode', 'caseCode')
@@ -197,8 +205,9 @@ export class DiagnosesService {
     return raw.map((row, index) => {
       const evaluated = this.evaluateRow(row);
       return {
+        diagnosisId: row.diagnosisId,
         number: index + 1,
-        date: new Date(row.createdAt).toISOString().slice(0, 10),
+        date: peruDate(row.createdAt),
         caseCode: row.caseCode,
         studyMode: row.studyMode,
         aiDiagnosis: row.aiDiagnosis,
@@ -236,6 +245,43 @@ export class DiagnosesService {
     return { result: null, standard: 'sin_patron' };
   }
 
+  /**
+   * Corrige la clase IGA de un diagnóstico (solo administrador).
+   *
+   * Es la corrección de un error de captura, no una reescritura: la clase original queda en
+   * `clase_iga_original` (solo la de la primera corrección), con quién, cuándo y por qué. El
+   * `acuerdo` se recalcula contra el patrón de referencia vigente. `sugerencia_aceptada` NO se toca:
+   * registra lo que decidió el especialista en el momento y la IA no se modifica.
+   */
+  async correct(id: string, dto: CorrectDiagnosisDto, adminId: string): Promise<Diagnosis> {
+    const diagnosis = await this.repository.findOne({ where: { id } });
+    if (diagnosis === null) throw new NotFoundException(`No existe el diagnóstico ${id}.`);
+    if (diagnosis.igaClass === dto.igaClass) {
+      throw new BadRequestException('La clase indicada es la que ya tiene el diagnóstico.');
+    }
+    const clinicalCase = await this.cases.findOne({ where: { id: diagnosis.caseId } });
+    if (clinicalCase === null) throw new NotFoundException(`No existe el caso ${diagnosis.caseId}.`);
+
+    diagnosis.originalIgaClass ??= diagnosis.igaClass;
+    diagnosis.igaClass = dto.igaClass;
+    // Si el patrón de este caso se fijó a partir del diagnóstico del especialista
+    // (`fijar-referencia-especialista`), corregir el diagnóstico corrige también su referencia.
+    if (diagnosis.studyMode === 'postest' && (clinicalCase.notes ?? '').includes('[ref:especialista]')) {
+      clinicalCase.groundTruthIga = dto.igaClass;
+      await this.cases.save(clinicalCase);
+    }
+    diagnosis.agreement =
+      clinicalCase.groundTruthIga === null
+        ? null
+        : dto.igaClass === clinicalCase.groundTruthIga
+          ? 'correcto'
+          : 'incorrecto';
+    diagnosis.correctedBy = adminId;
+    diagnosis.correctedAt = new Date();
+    diagnosis.correctionReason = dto.reason.trim();
+    return this.repository.save(diagnosis);
+  }
+
   toDto(
     diagnosis: Diagnosis,
     caseCode: string,
@@ -260,12 +306,16 @@ export class DiagnosesService {
       internalNotes: diagnosis.internalNotes,
       notes: diagnosis.notes,
       createdAt: diagnosis.createdAt.toISOString(),
+      originalIgaClass: diagnosis.originalIgaClass,
+      correctionReason: diagnosis.correctionReason,
+      correctedAt: diagnosis.correctedAt?.toISOString() ?? null,
       reviewMinutes: durationSeconds === null ? null : durationSeconds / 60,
     };
   }
 }
 
 interface RawAnexo5Row {
+  diagnosisId: string;
   createdAt: string;
   referenceDiagnosis: IgaClass;
   studyMode: StudyMode;

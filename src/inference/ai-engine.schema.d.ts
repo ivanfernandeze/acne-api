@@ -436,6 +436,13 @@ export interface components {
              */
             verdict: "acne" | "piel_sana" | "no_acne";
             /**
+             * Verdict Source
+             * @description Quién decidió `verdict`: `filtro` (el filtro local, o nadie si `gate_checked` es falso) o `segunda_opinion` (la verificación previa vio otra condición y la imagen no se graduó, aunque el filtro dijera acné; ver `second_opinion`).
+             * @default filtro
+             * @enum {string}
+             */
+            verdict_source: "filtro" | "segunda_opinion";
+            /**
              * Gate Probabilities
              * @description Probabilidad de cada etiqueta del filtro (acne, sana, otra); null sin filtro.
              */
@@ -497,6 +504,8 @@ export interface components {
              * @description Acuerdo entre los miembros del ensemble; null con un solo modelo.
              */
             agreement?: ("unanime" | "mayoria" | "discrepancia") | null;
+            /** @description Segunda opinión antes de graduar, consultada solo para imágenes que el filtro deja pasar como acné. Si dice `otra_condicion` (y SECOND_OPINION_STOPS_GRADING está activo), la imagen no se gradúa: `verdict` es `no_acne` y `verdict_source` es `segunda_opinion`. En los demás casos es informativa. Nula cuando está desactivada, no se consultó o falló. */
+            second_opinion?: components["schemas"]["SecondOpinionOut"] | null;
         };
         /**
          * MemberPredictionOut
@@ -665,6 +674,34 @@ export interface components {
             class_probs: {
                 [key: string]: number;
             };
+        };
+        /**
+         * SecondOpinionOut
+         * @description What an independent model saw in the photograph, before the IGA models graded it.
+         */
+        SecondOpinionOut: {
+            /**
+             * Label
+             * @description Qué muestra principalmente la imagen.
+             * @enum {string}
+             */
+            label: "acne" | "piel_sana" | "otra_condicion" | "indeterminado";
+            /**
+             * Conditions
+             * @description Condiciones distintas del acné que se observan (vacía si ninguna).
+             */
+            conditions?: string[];
+            /**
+             * Explanation
+             * @description Una frase para el dermatólogo.
+             * @default
+             */
+            explanation: string;
+            /**
+             * Version
+             * @description Modelo y revisión de la pregunta, p. ej. gemini/…/c1.
+             */
+            version: string;
         };
         /** ValidationError */
         ValidationError: {

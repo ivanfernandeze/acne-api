@@ -21,7 +21,13 @@ import type {
   AuthenticatedUser,
 } from 'src/common/interfaces/authenticated-user';
 
-import { DATASET_NAMES, DatasetExportService, type DatasetName } from './dataset-export.service';
+import {
+  DATASET_NAMES,
+  DatasetExportService,
+  EXPORT_MODES,
+  type DatasetName,
+  type ExportMode,
+} from './dataset-export.service';
 import {
   GeneralHypothesisResultDto,
   HypothesisTestRequestDto,
@@ -112,6 +118,12 @@ export class StatsController {
   @Roles(...RAW_EXPORT_ROLES)
   @ApiQuery({ name: 'dataset', required: false, enum: DATASET_NAMES })
   @ApiQuery({ name: 'includeSynthetic', required: false, type: Boolean })
+  @ApiQuery({
+    name: 'mode',
+    required: false,
+    enum: EXPORT_MODES,
+    description: 'Solo tiempos, diagnosticos, jornadas y encuestas. Sin valor, entrega ambas condiciones.',
+  })
   @ApiOperation({
     summary: 'Descarga en CSV las mediciones del estudio (solo admin, RF-TR-02).',
     description:
@@ -124,8 +136,13 @@ export class StatsController {
     @Res() response: Response,
     @Query('dataset') dataset?: DatasetName,
     @Query('includeSynthetic') includeSynthetic?: string,
+    @Query('mode') mode?: string,
   ): Promise<void> {
     const name = dataset ?? 'mediciones';
+    if (mode !== undefined && mode !== '' && !EXPORT_MODES.includes(mode as ExportMode)) {
+      throw new BadRequestException(`«${mode}» no es una condición. Use: ${EXPORT_MODES.join(', ')}.`);
+    }
+    const exportMode = mode === undefined || mode === '' ? null : (mode as ExportMode);
     // Un nombre desconocido dejaba a `queryFor` sin rama que devolver y el driver recibia una
     // consulta indefinida: 500 y un stack trace donde correspondia decir cuales son los datasets.
     if (!DATASET_NAMES.includes(name)) {
@@ -133,14 +150,14 @@ export class StatsController {
         `«${name}» no es un dataset del estudio. Disponibles: ${DATASET_NAMES.join(', ')}.`,
       );
     }
-    const csv = await this.datasetExport.export(name, includeSynthetic === 'true');
+    const csv = await this.datasetExport.export(name, includeSynthetic === 'true', exportMode);
 
     await this.auditService.record(
       user,
       {
         action: 'dataset.export',
         entityType: 'dataset',
-        metadata: { dataset: name, includeSynthetic: includeSynthetic === 'true' },
+        metadata: { dataset: name, includeSynthetic: includeSynthetic === 'true', mode: exportMode },
       },
       request,
     );
@@ -149,7 +166,7 @@ export class StatsController {
     response.setHeader('Content-Type', 'text/csv; charset=utf-8');
     response.setHeader(
       'Content-Disposition',
-      `attachment; filename="dataset-${name}-${stamp}.csv"`,
+      `attachment; filename="dataset-${name}${exportMode === null ? '' : `-${exportMode}`}-${stamp}.csv"`,
     );
     response.send(csv);
   }

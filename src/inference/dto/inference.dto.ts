@@ -65,6 +65,29 @@ export class AiInferenceMemberDto {
 
 export const ENSEMBLE_AGREEMENTS = ['unanime', 'mayoria', 'discrepancia'] as const;
 export const ACNE_VERDICTS = ['acne', 'piel_sana', 'no_acne'] as const;
+export const SECOND_OPINION_LABELS = ['acne', 'piel_sana', 'otra_condicion', 'indeterminado'] as const;
+
+/**
+ * Second opinion taken before grading, by an external model. When it sees another condition the
+ * view is not graded (`verdict = no_acne`, `verdictSource = segunda_opinion`); otherwise the portal
+ * shows it as a warning so the specialist reads the grade knowing the image may not show acne.
+ */
+export class SecondOpinionDto {
+  @ApiProperty({
+    enum: SECOND_OPINION_LABELS,
+    description:
+      'Qué muestra principalmente la imagen según la segunda opinión. `otra_condicion` y ' +
+      '`piel_sana` merecen advertencia: la lectura IGA de esa toma puede no corresponder a acné.',
+  })
+  label: (typeof SECOND_OPINION_LABELS)[number];
+  @ApiProperty({
+    type: [String],
+    description: 'Condiciones distintas del acné que nombró (vacía si ninguna). Texto del modelo.',
+  })
+  conditions: string[];
+  @ApiProperty({ description: 'Una frase para el dermatólogo.' }) explanation: string;
+  @ApiProperty({ description: 'Modelo y revisión de la pregunta (RNF-03).' }) version: string;
+}
 
 /** One CNN prediction, as returned to the portal. Covers: OE2 (RF-OE2-01). */
 export class AiInferenceDto {
@@ -83,11 +106,27 @@ export class AiInferenceDto {
   })
   verdict: AcneVerdict;
   @ApiProperty({
+    enum: ['filtro', 'segunda_opinion'],
+    description:
+      'Quién decidió `verdict`. `segunda_opinion`: la verificación previa vio otra condición ' +
+      '(ver `secondOpinion`) en una toma que el filtro dejaba pasar como acné, y no se graduó.',
+  })
+  verdictSource: 'filtro' | 'segunda_opinion';
+  @ApiProperty({
     nullable: true,
     type: Number,
     description: 'Probabilidad de acné según el filtro; nula si el motor no tenía filtro.',
   })
   acneProbability: number | null;
+  @ApiProperty({
+    type: () => SecondOpinionDto,
+    nullable: true,
+    description:
+      'Segunda opinión antes de graduar. Si vio otra condición, la toma no se graduó ' +
+      '(`verdictSource = segunda_opinion`); si no, es una advertencia. Nula si no se consultó: desactivada, sin ' +
+      'clave, fallida, o porque el filtro ya había detenido la imagen.',
+  })
+  secondOpinion: SecondOpinionDto | null;
   @ApiProperty({ nullable: true, enum: IGA_CLASSES }) igaClass: IgaClass | null;
   @ApiProperty({ nullable: true, type: Number }) confidence: number | null;
   @ApiProperty({
@@ -260,10 +299,19 @@ export class CaseAnalysisDto {
   @ApiProperty({
     type: [String],
     description:
-      'imageId de las tomas que el filtro declaró «otra condición». Quedan fuera de la sugerencia ' +
-      'del caso. Las tomas de piel sana SÍ participan, como `sin_lesiones`.',
+      'imageId de las tomas declaradas «otra condición» —por el filtro local o por la verificación ' +
+      'previa (`verdictSource`)—. No se graduaron y quedan fuera de la sugerencia del caso.',
   })
   noAcneViews: string[];
+  @ApiProperty({
+    type: [String],
+    description:
+      'imageId de las tomas que el filtro declaró «piel sana» y que se descartaron de la sugerencia ' +
+      'porque otra toma sí muestra acné: su `sin_lesiones` lleva la probabilidad del filtro, no un ' +
+      'grado, y no debe competir con las lesiones de la otra mejilla. Vacío cuando ninguna toma ' +
+      'muestra acné: entonces las tomas sanas sostienen la sugerencia (`piel_sana`).',
+  })
+  healthyViewsSetAside: string[];
   @ApiProperty({ description: 'Tomas con inferencia terminada con éxito.' }) completed: number;
   @ApiProperty({ description: 'Tomas con inferencia pendiente o en ejecución.' }) pending: number;
   @ApiProperty({ description: 'Tomas cuya inferencia falló.' }) failed: number;

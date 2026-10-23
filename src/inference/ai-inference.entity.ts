@@ -12,7 +12,12 @@ import {
 
 import type { GagsGrade, IgaClass, ProcessStatus } from 'src/common/domain';
 
-import type { AcneVerdict, EnsembleAgreement } from './ai-engine.client';
+import type {
+  AcneVerdict,
+  EnsembleAgreement,
+  SecondOpinionLabel,
+  VerdictSource,
+} from './ai-engine.client';
 import { ClinicalCase } from 'src/cases/case.entity';
 import { CaseImage } from 'src/images/case-image.entity';
 
@@ -89,6 +94,13 @@ export class AiInference {
   @Column({ type: 'varchar', length: 12, name: 'veredicto_codigo', default: 'acne' })
   verdict: AcneVerdict;
 
+  /**
+   * Who decided `verdict`: the local gate (`filtro`), or the second opinion (`segunda_opinion`)
+   * when it saw another condition in an image the gate had let through as acne.
+   */
+  @Column({ type: 'varchar', length: 16, name: 'veredicto_origen', default: 'filtro' })
+  verdictSource: VerdictSource;
+
   /** The gate's probability of acne; null when no gate was loaded. */
   @Column({ type: 'double precision', name: 'probabilidad_acne', nullable: true })
   acneProbability: number | null;
@@ -96,6 +108,24 @@ export class AiInference {
   /** Version of the gate that decided the verdict; null when there was none. */
   @Column({ type: 'varchar', length: 120, name: 'version_filtro', nullable: true })
   gateVersion: string | null;
+
+  /**
+   * Second opinion taken before grading (an external model). When it saw another condition the view
+   * was not graded and `verdictSource` is `segunda_opinion`; otherwise it is a warning the portal
+   * shows next to the reading. All four null when it was not consulted.
+   */
+  @Column({ type: 'varchar', length: 16, name: 'segunda_opinion_codigo', nullable: true })
+  secondOpinionLabel: SecondOpinionLabel | null;
+
+  /** Conditions other than acne it named, joined by «; ». Display text, never aggregated. */
+  @Column({ type: 'varchar', length: 300, name: 'segunda_opinion_condiciones', nullable: true })
+  secondOpinionConditions: string | null;
+
+  @Column({ type: 'varchar', length: 400, name: 'segunda_opinion_explicacion', nullable: true })
+  secondOpinionExplanation: string | null;
+
+  @Column({ type: 'varchar', length: 120, name: 'segunda_opinion_version', nullable: true })
+  secondOpinionVersion: string | null;
 
   /** How far the ensemble members agreed; null when a single model served. */
   @Column({ type: 'varchar', length: 16, name: 'acuerdo_codigo', nullable: true })

@@ -57,6 +57,10 @@ pnpm seed:admin           # crea las cuentas e imprime las contraseñas UNA sola
 pnpm dev                  # http://localhost:3001/api
 ```
 
+> **Tras cada `git pull`, ejecute `pnpm migration:run`.** La API no aplica las migraciones al
+> arrancar (salvo en Docker con `RUN_MIGRATIONS=true`); con una migración pendiente, como
+> `SegundaOpinion1758400000000` u `OrigenVeredicto1758500000000`, las lecturas del análisis fallan.
+
 Verificación:
 
 ```bash
@@ -101,7 +105,7 @@ anamnesis/       Cuestionario clínico de acné por visita (extensión, ver TRAC
 capture/         Sesiones de captura desde el móvil por QR (Sección 9.3, RNF-02)
 cases/ images/   Casos, apertura cronometrada, imágenes cifradas
 study/           Guard de la variable independiente y Anexo 4
-inference/       Cliente del motor + cola con reintentos
+inference/       Cliente del motor + cola con reintentos, segunda opinión y análisis del caso
 diagnoses/       Juicio del especialista y Anexo 5
 sessions/        Jornadas y Anexo 7 (OE4)
 surveys/         Cuestionario Likert, Anexo 6 (OE3)
@@ -125,6 +129,22 @@ meta/            Catálogos del dominio para el frontend
 - **Logs inmutables.** `indicator_snapshots` y `hypothesis_runs` guardan los datos exactos, la
   semilla y la versión de la función estadística, de modo que un evaluador externo puede
   reproducir cualquier cifra citada (RNF-05).
+
+### Análisis del caso
+
+`POST /api/inference/case/:id` envía cada toma al motor, que antes de graduar aplica el filtro
+acné / piel sana / otra condición y, para lo que el filtro deja pasar como acné, una **segunda
+opinión** externa (Gemini, desactivada por defecto). Toda esta validación clínica vive en la
+inferencia, que no se invoca en pretest (RF-TR-01). Cada inferencia guarda lo que vio la segunda
+opinión (`inferencias_ia.segunda_opinion_*`, DTO `secondOpinion`) y **quién decidió el veredicto**
+(`veredicto_origen` / `verdictSource`: `filtro` o `segunda_opinion`, cuando vio otra condición y la
+toma no se graduó). Mapeo en `src/inference/second-opinion.ts`.
+
+La sugerencia del caso (`common/domain/case-analysis.ts`) se arma así: las tomas de otra condición
+quedan fuera (`noAcneViews`); si alguna toma muestra acné, las de piel sana se **descartan**
+(`viewsForSuggestion`, devueltas en `healthyViewsSetAside`), porque su confianza es la del filtro y
+no un grado IGA; y entre las restantes decide la mayoría de tomas o, si todas difieren, la más
+segura. Sin tomas graduables el caso queda sin sugerencia (`no_acne`); con todas sanas, `piel_sana`.
 
 ---
 

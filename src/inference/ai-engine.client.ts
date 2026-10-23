@@ -61,9 +61,26 @@ export type EnsembleAgreement = 'unanime' | 'mayoria' | 'discrepancia';
  */
 export type AcneVerdict = 'acne' | 'piel_sana' | 'no_acne';
 
+/** Who decided `verdict`: the local gate, or the second opinion when it saw another condition. */
+export type VerdictSource = 'filtro' | 'segunda_opinion';
+
+/** What the advisory second opinion saw (see `SecondOpinionOut` in the engine). */
+export type SecondOpinionLabel = 'acne' | 'piel_sana' | 'otra_condicion' | 'indeterminado';
+
+export interface SecondOpinion {
+  label: SecondOpinionLabel;
+  /** Conditions other than acne that it named, most evident first. Empty when none. */
+  conditions: string[];
+  explanation: string;
+  /** Model and prompt revision, e.g. `gemini/gemini-2.5-flash/c1`. */
+  version: string;
+}
+
 export interface InferSingleResponse {
   /** Absent from engines older than the gate, which graded everything: read as `acne`. */
   verdict?: AcneVerdict;
+  /** Absent from engines older than the second opinion: read as `filtro`. */
+  verdict_source?: VerdictSource;
   /** False when no gate is loaded: `verdict` is then `acne` by default, not by verification. */
   gate_checked?: boolean;
   acne_probability?: number | null;
@@ -89,6 +106,11 @@ export interface InferSingleResponse {
   /** Individual readings when the engine serves an ensemble; empty with a single model. */
   members?: MemberPrediction[];
   agreement?: EnsembleAgreement | null;
+  /**
+   * Advisory second opinion, taken before grading for images the gate let through as acne. It
+   * never changes `verdict`. Null or absent when it is off, was not consulted, or failed.
+   */
+  second_opinion?: SecondOpinion | null;
 }
 
 /**

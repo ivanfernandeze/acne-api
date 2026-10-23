@@ -88,6 +88,19 @@ export class Diagnosis {
   @Column({ type: 'text', name: 'notas', nullable: true })
   notes: string | null;
 
+  /** Clase IGA emitida originalmente; solo se llena si el administrador la corrigió. */
+  @Column({ type: 'varchar', length: 24, name: 'clase_iga_original', nullable: true })
+  originalIgaClass: IgaClass | null;
+
+  @Column({ type: 'uuid', name: 'corregido_por', nullable: true })
+  correctedBy: string | null;
+
+  @Column({ type: 'timestamptz', name: 'corregido_en', nullable: true })
+  correctedAt: Date | null;
+
+  @Column({ type: 'text', name: 'motivo_correccion', nullable: true })
+  correctionReason: string | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'creado_en' })
   createdAt: Date;
 }

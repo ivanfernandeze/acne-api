@@ -105,15 +105,35 @@ export type ViewVerdict = 'acne' | 'piel_sana' | 'no_acne';
 /**
  * The case's verdict from its finished views.
  *
- * `no_acne` (another condition) views are left out of the suggestion; healthy-skin views take part
- * as `sin_lesiones`. So: no finished view → `null`; no gradable view → `no_acne` (incongruence,
- * nothing to suggest); every gradable view healthy → `piel_sana`; otherwise `acne`.
+ * `no_acne` (another condition) views are left out of the suggestion. So: no finished view →
+ * `null`; no gradable view → `no_acne` (incongruence, nothing to suggest); every gradable view
+ * healthy → `piel_sana`; otherwise `acne`.
  */
 export function caseVerdictOf(verdicts: readonly ViewVerdict[]): ViewVerdict | null {
   if (verdicts.length === 0) return null;
   const gradable = verdicts.filter((verdict) => verdict !== 'no_acne');
   if (gradable.length === 0) return 'no_acne';
   return gradable.every((verdict) => verdict === 'piel_sana') ? 'piel_sana' : 'acne';
+}
+
+/**
+ * Which finished views the suggestion is built from, and which healthy ones were set aside.
+ *
+ * A view the gate called healthy skin answers `sin_lesiones` with the GATE's probability, not an
+ * IGA classifier's confidence. Put next to graded views it competed on that number — a clear cheek
+ * at «100 %» beat a severe one at 69 % and the case came out `sin_lesiones` — which compared two
+ * different things. So: when any view was graded as acne, the healthy views are discarded (a clear
+ * cheek beside an affected one says nothing about the grade of the lesions); only when NO view
+ * shows acne do the healthy ones carry the suggestion, as `sin_lesiones`. Views declared another
+ * condition never take part.
+ */
+export function viewsForSuggestion<V extends { verdict: ViewVerdict | null }>(
+  views: readonly V[],
+): { pool: V[]; healthySetAside: V[] } {
+  const acne = views.filter((view) => view.verdict === 'acne' || view.verdict === null);
+  const healthy = views.filter((view) => view.verdict === 'piel_sana');
+  if (acne.length > 0) return { pool: acne, healthySetAside: healthy };
+  return { pool: healthy, healthySetAside: [] };
 }
 
 /** One sentence for the physician: which rule produced the suggestion and from which views. */

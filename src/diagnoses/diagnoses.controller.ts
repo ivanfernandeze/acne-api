@@ -11,7 +11,7 @@ import type {
 } from 'src/common/interfaces/authenticated-user';
 
 import { DiagnosesService } from './diagnoses.service';
-import { Anexo5RowDto, DiagnosisDto, SubmitDiagnosisDto } from './dto/diagnosis.dto';
+import { Anexo5RowDto, CorrectDiagnosisDto, DiagnosisDto, SubmitDiagnosisDto } from './dto/diagnosis.dto';
 
 /** Covers: OE2 (RF-OE2-01, RF-OE2-02) and OE1 (cierre del cronómetro). */
 @ApiTags('diagnoses')
@@ -59,6 +59,35 @@ export class DiagnosesController {
       request,
     );
     return diagnosis;
+  }
+
+  @Post(':id/correct')
+  @Roles('admin')
+  @ApiOperation({
+    summary: 'Corrige la clase IGA de un diagnóstico (solo administrador, con motivo).',
+    description:
+      'Corrección de un error de captura. Conserva la clase original, quién corrigió, cuándo y ' +
+      'por qué, y recalcula el acuerdo contra el patrón de referencia. No modifica la lectura de la IA.',
+  })
+  async correct(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CorrectDiagnosisDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<DiagnosisDto> {
+    const before = await this.diagnosesService.findOneOrFail(id);
+    const saved = await this.diagnosesService.correct(id, dto, user.id);
+    await this.auditService.record(
+      user,
+      {
+        action: 'diagnosis.correct',
+        entityType: 'diagnosis',
+        entityId: id,
+        metadata: { caseId: saved.caseId, from: before.igaClass, to: saved.igaClass, reason: saved.correctionReason },
+      },
+      request,
+    );
+    return this.diagnosesService.toDto(saved, '', '', null);
   }
 
   @Get('case/:caseId')

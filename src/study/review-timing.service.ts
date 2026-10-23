@@ -9,6 +9,7 @@ import { User } from 'src/users/user.entity';
 
 import type { Anexo4RowDto } from './dto/anexo4.dto';
 import { ReviewTiming } from './review-timing.entity';
+import { peruDate } from 'src/common/peru-date';
 
 /**
  * Chronometry of the medical review — the engine behind OE1 and the digital Anexo 4.
@@ -128,7 +129,7 @@ export class ReviewTimingService {
     return raw.map((row, index) => ({
       number: index + 1,
       id: row.id,
-      date: new Date(row.t0).toISOString().slice(0, 10),
+      date: peruDate(row.t0),
       caseCode: row.caseCode,
       patientCode: row.patientCode,
       professional: row.professional,

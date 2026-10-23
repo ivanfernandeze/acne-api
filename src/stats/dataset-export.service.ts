@@ -31,14 +31,34 @@ export const DATASET_NAMES: readonly DatasetName[] = [
   'anamnesis',
 ];
 
+export type ExportMode = 'pretest' | 'postest';
+export const EXPORT_MODES: readonly ExportMode[] = ['pretest', 'postest'];
+
+const MODE_FILTERABLE: ReadonlySet<DatasetName> = new Set<DatasetName>([
+  'tiempos',
+  'diagnosticos',
+  'jornadas',
+  'encuestas',
+]);
+
 @Injectable()
 export class DatasetExportService {
   constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
-  async export(dataset: DatasetName, includeSynthetic: boolean): Promise<string> {
+  /**
+   * `mode` restringe a una sola condición (pretest o postest) los datasets en formato largo.
+   * `mediciones` (ancho, pretest y postest del mismo caso en una fila) y `anamnesis` (por caso, sin
+   * condición) no lo admiten: filtrarlos dejaría columnas vacías o vaciaría el dataset.
+   */
+  async export(
+    dataset: DatasetName,
+    includeSynthetic: boolean,
+    mode: ExportMode | null = null,
+  ): Promise<string> {
+    const params = MODE_FILTERABLE.has(dataset) ? [includeSynthetic, mode] : [includeSynthetic];
     const rows = await this.dataSource.query<Array<Record<string, unknown>>>(
       this.queryFor(dataset),
-      [includeSynthetic],
+      params,
     );
     return this.toCsv(dataset === 'anamnesis' ? rows.map(flattenAnamnesis) : rows);
   }
@@ -60,8 +80,8 @@ export class DatasetExportService {
                  dpost."clase_iga_codigo"                          AS "iga_especialista_postest",
                  ai."clase_iga_codigo"                             AS "iga_ia",
                  ai."confianza"                            AS "confianza_ia",
-                 CASE WHEN dpre."clase_iga_codigo" = c."clase_iga_referencia" THEN 1 ELSE 0 END AS "acierto_pretest",
-                 CASE WHEN ai."clase_iga_codigo"  = c."clase_iga_referencia" THEN 1 ELSE 0 END AS "acierto_postest",
+                 CASE WHEN c."clase_iga_referencia" IS NULL OR dpre."clase_iga_codigo" IS NULL THEN NULL WHEN dpre."clase_iga_codigo" = c."clase_iga_referencia" THEN 1 ELSE 0 END AS "acierto_pretest",
+                 CASE WHEN c."clase_iga_referencia" IS NULL OR ai."clase_iga_codigo" IS NULL THEN NULL WHEN ai."clase_iga_codigo" = c."clase_iga_referencia" THEN 1 ELSE 0 END AS "acierto_postest",
                  c."es_sintetico"                           AS "es_sintetico"
             FROM "casos" c
             JOIN "pacientes" p ON p."id" = c."paciente_id"
@@ -93,6 +113,7 @@ export class DatasetExportService {
             JOIN "casos" c ON c."id" = t."caso_id"
             JOIN "usuarios" u ON u."id" = t."usuario_id"
            WHERE ($1::boolean OR c."es_sintetico" = false)
+             AND ($2::text IS NULL OR t."modo_estudio_codigo" = $2)
            ORDER BY t."t0" ASC`;
 
       case 'diagnosticos':
@@ -106,11 +127,15 @@ export class DatasetExportService {
                  d."acuerdo"        AS "resultado",
                  d."sugerencia_aceptada" AS "acepto_sugerencia_ia",
                  d."creado_en"       AS "fecha",
+                 (d."corregido_en" IS NOT NULL) AS "corregido",
+                 d."clase_iga_original"         AS "iga_original",
+                 d."motivo_correccion"          AS "motivo_correccion",
                  c."es_sintetico"     AS "es_sintetico"
             FROM "diagnosticos" d
             JOIN "casos" c ON c."id" = d."caso_id"
             JOIN "usuarios" u ON u."id" = d."usuario_id"
            WHERE ($1::boolean OR c."es_sintetico" = false)
+             AND ($2::text IS NULL OR d."modo_estudio_codigo" = $2)
            ORDER BY d."creado_en" ASC`;
 
       case 'jornadas':
@@ -128,6 +153,7 @@ export class DatasetExportService {
             JOIN "usuarios" u ON u."id" = s."usuario_id"
            WHERE ($1::boolean OR s."es_sintetico" = false)
              AND s."finalizada_en" IS NOT NULL
+             AND ($2::text IS NULL OR s."modo_estudio_codigo" = $2)
            ORDER BY s."iniciada_en" ASC`;
 
       case 'encuestas':
@@ -146,6 +172,7 @@ export class DatasetExportService {
             JOIN "detalle_respuestas_encuesta" a ON a."respuesta_id" = r."id"
             JOIN "usuarios" u ON u."id" = r."usuario_id"
            WHERE ($1::boolean OR r."es_sintetico" = false)
+             AND ($2::text IS NULL OR r."modo_estudio_codigo" = $2)
            ORDER BY r."enviada_en" ASC, a."item_numero" ASC`;
 
       /**

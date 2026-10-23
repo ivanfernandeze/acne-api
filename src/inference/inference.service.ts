@@ -15,6 +15,7 @@ import {
   IGA_LABELS,
   aggregateViews,
   caseVerdictOf,
+  viewsForSuggestion,
   buildCaseReading,
   describeMissingShots,
   describeRule,
@@ -33,6 +34,7 @@ import { ImagesService } from 'src/images/images.service';
 import { QuestionsService } from 'src/questions/questions.service';
 
 import { AiInference } from './ai-inference.entity';
+import { fromSecondOpinionColumns, toSecondOpinionColumns } from './second-opinion';
 import { ChosenReading } from './chosen-reading.entity';
 import { AiEngineClient } from './ai-engine.client';
 import {
@@ -295,11 +297,15 @@ export class InferenceService implements OnModuleInit, OnModuleDestroy {
 
     const done = views.filter((v) => v.inference.status === 'exitoso');
     // A view the gate declared another condition has nothing to grade: it is left out of the
-    // suggestion. A healthy view DOES take part, as `sin_lesiones` (a clear cheek next to an
-    // affected one is clinically real). Only when no view is gradable does the case become
-    // `no_acne`; when every gradable view is healthy skin, `piel_sana`.
+    // suggestion. A healthy view is set aside as soon as another view shows acne — its
+    // `sin_lesiones` carries the gate's probability, not a grade, and must not outvote the
+    // lesions on the other cheek (see `viewsForSuggestion`). Only when no view is gradable does
+    // the case become `no_acne`; when every gradable view is healthy skin, `piel_sana`.
     const noAcneViews = done.filter((v) => v.inference.verdict === 'no_acne').map((v) => v.imageId);
-    const graded = done.filter((v) => v.inference.verdict !== 'no_acne');
+    const { pool: graded, healthySetAside } = viewsForSuggestion(
+      done.map((v) => ({ ...v, verdict: v.inference.verdict })),
+    );
+    const healthyViewsSetAside = healthySetAside.map((v) => v.imageId);
     const caseVerdict = caseVerdictOf(done.map((v) => v.inference.verdict));
     const counted = graded.filter(
       (v) => v.shotKey !== null && REQUIRED_SHOT_KEYS.includes(v.shotKey) && v.inference.classProbs !== null,
@@ -387,6 +393,7 @@ export class InferenceService implements OnModuleInit, OnModuleDestroy {
       reading,
       verdict: caseVerdict,
       noAcneViews,
+      healthyViewsSetAside,
       completed: done.length,
       pending: views.filter((v) => v.inference.status === 'pendiente' || v.inference.status === 'ejecutando').length,
       failed: views.filter((v) => v.inference.status === 'fallido').length,
@@ -617,8 +624,10 @@ export class InferenceService implements OnModuleInit, OnModuleDestroy {
         {
           status: 'exitoso',
           verdict,
+          verdictSource: result.verdict_source ?? 'filtro',
           acneProbability: result.acne_probability ?? null,
           gateVersion: result.gate_version ?? null,
+          ...toSecondOpinionColumns(result.second_opinion),
           igaClass: prediction?.iga_class ?? null,
           confidence: prediction?.confidence ?? null,
           gagsGrade: gags?.grade ?? null,
@@ -779,7 +788,9 @@ export class InferenceService implements OnModuleInit, OnModuleDestroy {
       imageId: inference.imageId,
       status: inference.status,
       verdict: inference.verdict ?? 'acne',
+      verdictSource: inference.verdictSource ?? 'filtro',
       acneProbability: inference.acneProbability ?? null,
+      secondOpinion: fromSecondOpinionColumns(inference),
       igaClass: inference.igaClass,
       confidence: inference.confidence,
       classProbs: toClassProbs(inference.probabilities),

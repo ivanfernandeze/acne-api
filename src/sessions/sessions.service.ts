@@ -8,6 +8,7 @@ import { round } from 'src/common/utils/descriptive';
 import type { Anexo7RowDto } from './dto/anexo7.dto';
 import type { CloseSessionDto, OpenSessionDto, WorkSessionDto } from './dto/session.dto';
 import { WorkSession } from './work-session.entity';
+import { peruDate } from 'src/common/peru-date';
 
 /**
  * Work journeys (jornadas) — the digital Anexo 7 and the source of TCAD.
@@ -111,7 +112,7 @@ export class SessionsService {
     return sessions.map((session, index) => ({
       number: index + 1,
       id: session.id,
-      date: session.startedAt.toISOString().slice(0, 10),
+      date: peruDate(session.startedAt),
       professional: session.user?.fullName ?? '—',
       shift: session.shift,
       studyMode: session.studyMode,

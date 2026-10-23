@@ -121,6 +121,10 @@ export class DiagnosisDto {
   @ApiProperty({ nullable: true, type: String }) internalNotes: string | null;
   @ApiProperty({ nullable: true, type: String }) notes: string | null;
   @ApiProperty() createdAt: string;
+  @ApiProperty({ nullable: true, enum: IGA_CLASSES, description: 'Clase emitida antes de la corrección del administrador; nulo si nunca se corrigió.' })
+  originalIgaClass: IgaClass | null;
+  @ApiProperty({ nullable: true, type: String }) correctionReason: string | null;
+  @ApiProperty({ nullable: true, type: String }) correctedAt: string | null;
   @ApiProperty({
     nullable: true,
     type: Number,
@@ -131,6 +135,8 @@ export class DiagnosisDto {
 
 /** One row of the digital Anexo 5 (RF-OE2-02). */
 export class Anexo5RowDto {
+  @ApiProperty({ description: 'Id del diagnóstico de la fila; lo usa la corrección del administrador.' })
+  diagnosisId: string;
   @ApiProperty() number: number;
   @ApiProperty() date: string;
   @ApiProperty() caseCode: string;
@@ -159,4 +165,19 @@ export class Anexo5RowDto {
   standard: 'ground_truth' | 'especialista' | 'sin_patron';
   @ApiProperty() professional: string;
   @ApiProperty() isSynthetic: boolean;
+}
+
+/** Corrección de un diagnóstico por el administrador (error de captura, no cambio de criterio). */
+export class CorrectDiagnosisDto {
+  @ApiProperty({ enum: IGA_CLASSES })
+  @IsIn(IGA_CLASSES)
+  igaClass: IgaClass;
+
+  @ApiProperty({
+    minLength: 15,
+    description: 'Qué se registró mal y con qué evidencia se corrige. Queda en la fila y en la auditoría.',
+  })
+  @IsString()
+  @MinLength(15)
+  reason: string;
 }

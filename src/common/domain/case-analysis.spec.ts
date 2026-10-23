@@ -1,4 +1,10 @@
-import { aggregateViews, caseVerdictOf, describeRule, type AnalysisView } from './case-analysis';
+import {
+  aggregateViews,
+  caseVerdictOf,
+  describeRule,
+  viewsForSuggestion,
+  type AnalysisView,
+} from './case-analysis';
 
 const view = (
   imageId: string,
@@ -88,5 +94,39 @@ describe('caseVerdictOf', () => {
   it('is acne as soon as one view was graded by the ensemble', () => {
     // A clear cheek next to an affected one is clinically real: the acne view wins.
     expect(caseVerdictOf(['piel_sana', 'acne', 'no_acne'])).toBe('acne');
+  });
+});
+
+describe('viewsForSuggestion', () => {
+  const v = (
+    id: string,
+    verdict: 'acne' | 'piel_sana' | 'no_acne' | null,
+  ): { id: string; verdict: 'acne' | 'piel_sana' | 'no_acne' | null } => ({ id, verdict });
+
+  it('sets healthy views aside when any view shows acne, so the gate never outvotes the grade', () => {
+    // The real case: the frontal view came back healthy at «100 %» and the profiles graded
+    // casi_sin_lesiones and severo. The suggestion must come from the profiles.
+    const { pool, healthySetAside } = viewsForSuggestion([
+      v('general', 'piel_sana'),
+      v('derecho', 'acne'),
+      v('izquierdo', 'acne'),
+    ]);
+    expect(pool.map((x) => x.id)).toEqual(['derecho', 'izquierdo']);
+    expect(healthySetAside.map((x) => x.id)).toEqual(['general']);
+  });
+
+  it('lets the healthy views carry the suggestion only when no view shows acne', () => {
+    const { pool, healthySetAside } = viewsForSuggestion([
+      v('general', 'piel_sana'),
+      v('derecho', 'piel_sana'),
+      v('izquierdo', 'no_acne'),
+    ]);
+    expect(pool.map((x) => x.id)).toEqual(['general', 'derecho']);
+    expect(healthySetAside).toEqual([]);
+  });
+
+  it('never includes another-condition views, and treats a legacy null verdict as graded', () => {
+    const { pool } = viewsForSuggestion([v('a', null), v('b', 'no_acne'), v('c', 'piel_sana')]);
+    expect(pool.map((x) => x.id)).toEqual(['a']);
   });
 });
