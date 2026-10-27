@@ -1,11 +1,23 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsIn, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 import {
+  CASE_VOID_REASON_MIN_LENGTH,
+  CASE_STAGES,
   CASE_STATUSES,
   IGA_CLASSES,
   SHOT_KEYS,
   STUDY_MODES,
+  type CaseStage,
   type CaseStatus,
   type IgaClass,
   type ShotKey,
@@ -49,20 +61,67 @@ export class CreateCaseDto {
 }
 
 export class UpdateCaseDto {
-  @ApiPropertyOptional({ enum: IGA_CLASSES })
+  @ApiPropertyOptional({
+    enum: IGA_CLASSES,
+    description: 'Patrón de consenso. Solo quien diagnostica y el administrador pueden cambiarlo.',
+  })
   @IsOptional()
   @IsIn(IGA_CLASSES)
   groundTruthIga?: IgaClass;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description:
+      'Paciente del caso, para corregir uno elegido por error. Se rechaza si el caso ya tiene ' +
+      'diagnóstico o receta: ambos se emitieron para el paciente anterior.',
+  })
   @IsOptional()
-  @IsUUID()
+  @IsUUID('4', { message: 'El identificador de paciente no es válido.' })
+  patientId?: string;
+
+  @ApiPropertyOptional({ description: 'Profesional asignado.' })
+  @IsOptional()
+  @IsUUID('4', { message: 'El identificador del profesional no es válido.' })
   assignedUserId?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ maxLength: 2000 })
   @IsOptional()
   @IsString()
+  @MaxLength(2000)
   notes?: string;
+}
+
+/** Por qué se quita el caso. Lo guarda la auditoría y, si se anula, la propia fila. */
+export class RemoveCaseDto {
+  @ApiProperty({ minLength: CASE_VOID_REASON_MIN_LENGTH, maxLength: 500 })
+  @IsString()
+  @MinLength(CASE_VOID_REASON_MIN_LENGTH, {
+    message: `Explique en al menos ${CASE_VOID_REASON_MIN_LENGTH} caracteres por qué se quita el caso.`,
+  })
+  @MaxLength(500)
+  reason: string;
+}
+
+export class CaseRemovalDto {
+  @ApiProperty({
+    enum: ['eliminar', 'anular'],
+    description:
+      '`eliminar`: el caso aún no tiene evidencia del estudio y se borra con sus fotos. `anular`: ' +
+      'ya la tiene; sale de la bandeja, los indicadores y las exportaciones, y la fila queda.',
+  })
+  mode: 'eliminar' | 'anular';
+  @ApiProperty({ type: [String], description: 'La evidencia que obliga a anular, en palabras.' })
+  evidence: string[];
+}
+
+export class CaseRemovalResultDto extends CaseRemovalDto {
+  @ApiProperty() caseCode: string;
+}
+
+/** Una persona a la que se puede asignar un caso. */
+export class CaseAssigneeDto {
+  @ApiProperty() id: string;
+  @ApiProperty() fullName: string;
+  @ApiProperty() role: string;
 }
 
 export class CaseSummaryDto {
@@ -91,11 +150,32 @@ export class CaseSummaryDto {
   })
   returnReason: string | null;
   @ApiProperty({ enum: CASE_STATUSES }) status: CaseStatus;
+  @ApiProperty({
+    enum: CASE_STAGES,
+    description: 'Lo que ve el personal: Borrador, En revisión o Revisado (agrupa `status`).',
+  })
+  stage: CaseStage;
   @ApiProperty({ nullable: true, enum: IGA_CLASSES }) groundTruthIga: IgaClass | null;
   @ApiProperty() isSynthetic: boolean;
   @ApiProperty() imageCount: number;
   @ApiProperty() createdAt: string;
   @ApiProperty({ nullable: true, type: String }) closedAt: string | null;
+  @ApiProperty({ nullable: true, type: String }) notes: string | null;
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description: 'Cuándo se anuló. Un caso anulado no admite cambios ni cuenta en el estudio.',
+  })
+  voidedAt: string | null;
+  @ApiProperty({ nullable: true, type: String }) voidReason: string | null;
+  @ApiProperty({
+    type: CaseRemovalDto,
+    nullable: true,
+    description:
+      'Qué pasaría al quitar el caso: borrarlo o anularlo. Lo llena la bandeja (`GET /cases`) y la ' +
+      'ficha; null en las demás respuestas.',
+  })
+  removal: CaseRemovalDto | null;
 }
 
 export class CaseTimingDto {

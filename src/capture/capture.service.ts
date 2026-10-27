@@ -2,6 +2,7 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomBytes } from 'node:crypto';
 import { IsNull, LessThan, Repository } from 'typeorm';
+import { assertCaseActive } from 'src/cases/case-guards';
 
 import { ClinicalCase } from 'src/cases/case.entity';
 import {
@@ -51,6 +52,7 @@ export class CaptureService {
   ): Promise<CaptureSessionCreatedDto> {
     const clinicalCase = await this.cases.findOne({ where: { id: caseId } });
     if (clinicalCase === null) throw new NotFoundException(`No existe el caso ${caseId}.`);
+    await assertCaseActive(this.cases.manager, caseId);
     if (clinicalCase.status === 'cerrado') {
       throw new BadRequestException('El caso está cerrado: no admite fotografías nuevas.');
     }

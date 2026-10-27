@@ -59,6 +59,7 @@ export class PatientHistoryService {
          FROM "casos" c
         WHERE c."paciente_id" = $1
           AND ($2::boolean OR c."es_sintetico" = false)
+          AND c."anulado_en" IS NULL
         ORDER BY c."creado_en" ASC`,
       [patient.id, includeSynthetic],
     );

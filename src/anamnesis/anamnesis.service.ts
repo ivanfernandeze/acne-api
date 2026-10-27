@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
+import { assertCaseActive } from 'src/cases/case-guards';
 
 import {
   ANAMNESIS_ADULT_AGE,
@@ -118,6 +119,7 @@ export class AnamnesisService {
     dto: SaveAnamnesisDto,
     userId: string,
   ): Promise<AnamnesisResponseDto> {
+    await assertCaseActive(this.dataSource.manager, caseId);
     const profile = await this.patientProfile(caseId);
     const catalogue = await this.questions.catalogue();
     const applicable = applicableQuestions(catalogue, profile.sex, ageFrom(profile.birthDate));
@@ -172,6 +174,7 @@ export class AnamnesisService {
          FROM "anamnesis_caso" a
          JOIN "casos" c ON c."id" = a."caso_id"
         WHERE c."paciente_id" = $1
+          AND c."anulado_en" IS NULL
           AND ($2::uuid IS NULL OR a."caso_id" <> $2::uuid)
         ORDER BY c."creado_en" DESC
         LIMIT 1`,

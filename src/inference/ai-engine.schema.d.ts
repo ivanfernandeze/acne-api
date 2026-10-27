@@ -271,6 +271,48 @@ export interface components {
             uptime_hours: number;
         };
         /**
+         * IdentityCheckOut
+         * @description Same-subject check. Identity only: nothing about the skin, nothing stored (Ley 29733).
+         */
+        IdentityCheckOut: {
+            /**
+             * Checked
+             * @description Falso si el verificador no está disponible o falló.
+             */
+            checked: boolean;
+            /**
+             * Face Found
+             * @description La candidata tiene un rostro con el que se puede comparar.
+             * @default false
+             */
+            face_found: boolean;
+            /** Comparisons */
+            comparisons?: components["schemas"]["IdentityComparisonOut"][];
+            /** Version */
+            version?: string | null;
+        };
+        /** IdentityComparisonOut */
+        IdentityComparisonOut: {
+            /** Label */
+            label: string;
+            /**
+             * Verdict
+             * @description `sin_rostro`: la REFERENCIA no tiene un rostro comparable.
+             * @enum {string}
+             */
+            verdict: "misma" | "distinta" | "sin_rostro";
+            /** Similarity */
+            similarity?: number | null;
+            /** Threshold */
+            threshold?: number | null;
+            /**
+             * Near Duplicate
+             * @description La candidata es esta misma fotografía, recodificada o reducida.
+             * @default false
+             */
+            near_duplicate: boolean;
+        };
+        /**
          * IiaCheckResponse
          * @description Technical datasheet that validates IIA = 1 (RF-TR-04).
          *
@@ -344,6 +386,11 @@ export interface components {
              * @default image/png
              */
             mime_type: string;
+            /**
+             * References
+             * @description Las demás tomas del caso. La candidata se compara con cada una: misma persona y no la misma fotografía reenviada. Se procesan en memoria y no se guarda nada.
+             */
+            references?: components["schemas"]["ScreenReference"][];
         };
         /**
          * ImageScreenResponse
@@ -393,6 +440,8 @@ export interface components {
              * @description Desplazamiento de la nariz respecto al punto medio de los ojos, en fracción del ancho del rostro (positivo = hacia la derecha de la imagen). Null si no se midió.
              */
             yaw_ratio?: number | null;
+            /** @description Comparación con las demás tomas del caso. Null solo si la imagen se rechazó. */
+            identity?: components["schemas"]["IdentityCheckOut"] | null;
             /** Latency Ms */
             latency_ms: number;
             /**
@@ -674,6 +723,24 @@ export interface components {
             class_probs: {
                 [key: string]: number;
             };
+        };
+        /**
+         * ScreenReference
+         * @description A photograph already filed in the same case, to compare the candidate against.
+         */
+        ScreenReference: {
+            /**
+             * Label
+             * @description Toma a la que pertenece (`general`…).
+             */
+            label: string;
+            /** Image Base64 */
+            image_base64: string;
+            /**
+             * Mime Type
+             * @default image/jpeg
+             */
+            mime_type: string;
         };
         /**
          * SecondOpinionOut

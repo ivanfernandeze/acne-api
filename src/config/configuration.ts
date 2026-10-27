@@ -83,7 +83,8 @@ export interface AppConfig {
      * Whether an uploaded photograph is screened for being an evaluable facial image before it is
      * filed. Off is a legitimate operating mode: the check costs a call per upload, and a model
      * that turns out to be too strict would block a real intake — the one failure a clinic cannot
-     * absorb. It never blocks on its own when the engine is unreachable.
+     * absorb. When ON it fails closed (since 25/10/2026): an unreachable engine, or one that could
+     * not compare the case's shots, refuses the upload with a 503 instead of admitting it unseen.
      */
     screenUploads: boolean;
   };

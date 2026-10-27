@@ -11,6 +11,9 @@ import {
   ANAMNESIS_SECTION_LABELS,
   ANAMNESIS_VERSION,
   APA_REFERENCES,
+  CASE_STAGES,
+  CASE_STAGE_LABELS,
+  CASE_STAGE_OF,
   CASE_STATUSES,
   CASE_STATUS_LABELS,
   CLINICAL_DISCLAIMER,
@@ -105,6 +108,8 @@ export class MetaController {
 
       studyModes: { values: STUDY_MODES, labels: STUDY_MODE_LABELS },
       caseStatuses: { values: CASE_STATUSES, labels: CASE_STATUS_LABELS },
+      // What the staff sees: three stages, each grouping internal statuses (`study.ts`).
+      caseStages: { values: CASE_STAGES, labels: CASE_STAGE_LABELS, ofStatus: CASE_STAGE_OF },
       workShifts: { values: WORK_SHIFTS, labels: WORK_SHIFT_LABELS },
       // Proceso clínico. No alimenta ningún indicador: el portal los necesita para pintar la
       // validación y la receta sin duplicar las listas del dominio.

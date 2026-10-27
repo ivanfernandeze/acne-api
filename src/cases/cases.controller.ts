@@ -1,13 +1,26 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  Req,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 
 import { AuditService } from 'src/audit/audit.service';
 import { CurrentUser, Roles } from 'src/common/decorators';
 import {
   DIAGNOSING_ROLES,
   CASE_ACCESS_ROLES,
+  CASE_STAGES,
   CASE_STATUSES,
   IDENTITY_ROLES,
+  isCaseStage,
   INTAKE_ROLES,
   STUDY_MODES,
   type CaseStatus,
@@ -21,10 +34,13 @@ import type {
 
 import { CasesService } from './cases.service';
 import {
+  CaseAssigneeDto,
   CaseDetailDto,
+  CaseRemovalResultDto,
   CaseReturnDto,
   CaseSummaryDto,
   CreateCaseDto,
+  RemoveCaseDto,
   UpdateCaseDto,
 } from './dto/case.dto';
 
@@ -42,6 +58,12 @@ export class CasesController {
   @Roles(...CASE_ACCESS_ROLES)
   @ApiQuery({ name: 'studyMode', required: false, enum: STUDY_MODES })
   @ApiQuery({ name: 'status', required: false, enum: CASE_STATUSES })
+  @ApiQuery({
+    name: 'stage',
+    required: false,
+    enum: CASE_STAGES,
+    description: 'Etapa visible (Borrador, En revisión, Revisado); agrupa varios `status`.',
+  })
   @ApiQuery({ name: 'mine', required: false, type: Boolean })
   @ApiQuery({ name: 'includeSynthetic', required: false, type: Boolean })
   @ApiQuery({
@@ -74,12 +96,14 @@ export class CasesController {
     @Query('includeSynthetic') includeSynthetic?: string,
     @Query('pending') pending?: string,
     @Query('search') search?: string,
+    @Query('stage') stage?: string,
   ): Promise<CaseSummaryDto[]> {
     const maySeeIdentity = IDENTITY_ROLES.includes(user.role);
 
     const cases = await this.casesService.findAll({
       studyMode,
       status,
+      stage: isCaseStage(stage) ? stage : undefined,
       assignedUserId: mine === 'true' ? user.id : undefined,
       includeSynthetic: includeSynthetic === 'true',
       pendingForMode: pending === 'true' ? SYSTEM_MEASUREMENT_MODE : undefined,
@@ -130,6 +154,15 @@ export class CasesController {
       request,
     );
     return created;
+  }
+
+  // Declared before `@Get(':id')`: Nest matches handlers in declaration order.
+  @Get('assignees')
+  @Roles(...CASE_ACCESS_ROLES)
+  @ApiOkResponse({ type: [CaseAssigneeDto] })
+  @ApiOperation({ summary: 'Personas a las que se puede asignar un caso (cuentas activas).' })
+  async assignees(): Promise<CaseAssigneeDto[]> {
+    return this.casesService.assignees();
   }
 
   @Get(':id')
@@ -279,14 +312,29 @@ export class CasesController {
   }
 
   @Patch(':id')
-  @Roles(...DIAGNOSING_ROLES, 'admin')
-  @ApiOperation({ summary: 'Actualiza el patrón de consenso o la asignación del caso.' })
+  @Roles(...CASE_ACCESS_ROLES)
+  @ApiOperation({
+    summary: 'Corrige el caso: paciente, profesional asignado, notas y patrón de consenso.',
+    description:
+      'Cualquier rol corrige el paciente, el profesional asignado y las notas. El patrón de ' +
+      'consenso es la etiqueta de referencia del estudio y sigue reservado a quien diagnostica y al ' +
+      'administrador (403 para el resto). Un caso anulado no admite cambios (400).',
+  })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCaseDto,
     @CurrentUser() user: AuthenticatedUser,
     @Req() request: AuthenticatedRequest,
   ): Promise<CaseSummaryDto> {
+    if (
+      dto.groundTruthIga !== undefined &&
+      !DIAGNOSING_ROLES.includes(user.role) &&
+      user.role !== 'admin'
+    ) {
+      throw new ForbiddenException(
+        'El patrón de consenso solo lo cambian quien diagnostica y el administrador.',
+      );
+    }
     const updated = await this.casesService.update(id, dto);
     await this.auditService.record(
       user,
@@ -294,5 +342,42 @@ export class CasesController {
       request,
     );
     return updated;
+  }
+
+  // A POST and not a DELETE, by the rule of `no-hard-delete.spec.ts`: what carries evidence is
+  // never deleted here, it gets a tombstone (`anulado_en`), like `POST /patients/:id/withdraw`.
+  // Only a case with no evidence at all is erased, the way `POST /images/:id/remove` erases a
+  // photograph nobody has read.
+  @Post(':id/remove')
+  @Roles(...CASE_ACCESS_ROLES)
+  @ApiOkResponse({ type: CaseRemovalResultDto })
+  @ApiOperation({
+    summary: 'Quita el caso: lo borra si no tiene evidencia del estudio, lo anula si la tiene.',
+    description:
+      'Sin diagnóstico, cronometraje de revisión, inferencia ni receta, el caso se BORRA con sus ' +
+      'fotos y su anamnesis. Con cualquiera de ellos se ANULA: sale de la bandeja, los indicadores, ' +
+      'los contrastes y las exportaciones, y la fila queda con quién, cuándo y por qué. El motivo es ' +
+      'obligatorio. `GET /cases/:id` adelanta cuál de los dos ocurrirá (`removal`).',
+  })
+  async remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RemoveCaseDto,
+    @CurrentUser() user: AuthenticatedUser,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<CaseRemovalResultDto> {
+    const result = await this.casesService.remove(id, dto.reason, user);
+    const metadata = {
+      caseCode: result.caseCode,
+      reason: dto.reason.trim(),
+      evidence: result.evidence,
+    };
+    await this.auditService.record(
+      user,
+      result.mode === 'eliminar'
+        ? { action: 'case.delete', entityType: 'case', entityId: id, metadata }
+        : { action: 'case.void', entityType: 'case', entityId: id, metadata },
+      request,
+    );
+    return result;
   }
 }

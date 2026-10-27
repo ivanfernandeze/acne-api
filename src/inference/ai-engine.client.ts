@@ -134,8 +134,37 @@ export interface ImageScreenResponse {
    */
   pose?: 'frontal' | 'nariz_derecha' | 'nariz_izquierda' | 'indeterminado';
   yaw_ratio?: number | null;
+  /**
+   * Comparison with the case's other shots: same person, not the same picture re-sent. Null when
+   * the image was refused; absent from engines older than the check, which acne-api treats as
+   * "not verified".
+   */
+  identity?: IdentityCheck | null;
   latency_ms: number;
   model_backend: 'stub' | 'torch' | 'gemini';
+}
+
+/** A photograph already in the case, sent so the candidate can be compared with it. */
+export interface ScreenReference {
+  label: string;
+  image_base64: string;
+  mime_type: string;
+}
+
+export interface IdentityCheck {
+  /** False when the verifier is unavailable or failed. Never a pass. */
+  checked: boolean;
+  /** The candidate shows a face clear enough to compare. */
+  face_found: boolean;
+  comparisons: Array<{
+    label: string;
+    /** `sin_rostro`: the REFERENCE has no comparable face. */
+    verdict: 'misma' | 'distinta' | 'sin_rostro';
+    similarity: number | null;
+    threshold: number | null;
+    near_duplicate: boolean;
+  }>;
+  version: string | null;
 }
 
 export interface IiaCheckResponse {
@@ -225,10 +254,15 @@ export class AiEngineClient {
     });
   }
 
-  async screenImage(imageBase64: string, mimeType: string): Promise<ImageScreenResponse> {
+  async screenImage(
+    imageBase64: string,
+    mimeType: string,
+    references: ScreenReference[] = [],
+  ): Promise<ImageScreenResponse> {
     return this.post<ImageScreenResponse>('/image/screen', {
       image_base64: imageBase64,
       mime_type: mimeType,
+      references,
     });
   }
 

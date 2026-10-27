@@ -111,6 +111,20 @@ export class ClinicalCase {
   @Column({ type: 'text', name: 'notas', nullable: true })
   notes: string | null;
 
+  /**
+   * Anulación: el caso tenía evidencia del estudio y no se podía borrar sin destruirla (ver
+   * `common/domain/case-removal.ts`). Anulado, sale de la bandeja, los indicadores, los contrastes y
+   * las exportaciones; la fila queda para la auditoría.
+   */
+  @Column({ type: 'timestamptz', name: 'anulado_en', nullable: true })
+  voidedAt: Date | null;
+
+  @Column({ type: 'uuid', name: 'anulado_por', nullable: true })
+  voidedById: string | null;
+
+  @Column({ type: 'text', name: 'motivo_anulacion', nullable: true })
+  voidReason: string | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'creado_en' })
   createdAt: Date;
 

@@ -85,6 +85,19 @@ export class SessionsService {
     return session.id;
   }
 
+  /**
+   * Undoes `countCompletedCase` for a case that was annulled after it counted: TCAD (OE4) must not
+   * keep crediting a session with a case that is no longer part of the study. Never below zero.
+   */
+  async uncountCase(sessionId: string): Promise<void> {
+    await this.repository
+      .createQueryBuilder()
+      .update()
+      .set({ casesReviewed: () => 'GREATEST("casos_revisados" - 1, 0)' })
+      .where('id = :sessionId', { sessionId })
+      .execute();
+  }
+
   async findAll(userId?: string, studyMode?: StudyMode): Promise<WorkSession[]> {
     const query = this.repository
       .createQueryBuilder('session')

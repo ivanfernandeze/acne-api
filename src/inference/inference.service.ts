@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, IsNull, Repository } from 'typeorm';
+import { assertCaseActive } from 'src/cases/case-guards';
 
 import {
   REQUIRED_SHOT_KEYS,
@@ -122,6 +123,7 @@ export class InferenceService implements OnModuleInit, OnModuleDestroy {
     userId: string,
     force = false,
   ): Promise<AiInference> {
+    await assertCaseActive(this.dataSource.manager, caseId);
     const missing = await this.imagesService.missingRequiredShots(caseId);
     if (missing.length > 0) throw new BadRequestException(describeMissingShots(missing));
 
@@ -155,6 +157,7 @@ export class InferenceService implements OnModuleInit, OnModuleDestroy {
    * and did not fail is not re-queued, unless `force` asks for a fresh reading of every view.
    */
   async requestForCase(caseId: string, userId: string, force = false): Promise<AiInference[]> {
+    await assertCaseActive(this.dataSource.manager, caseId);
     const missing = await this.imagesService.missingRequiredShots(caseId);
     if (missing.length > 0) throw new BadRequestException(describeMissingShots(missing));
 

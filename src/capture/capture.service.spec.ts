@@ -43,6 +43,8 @@ describe('CaptureService', () => {
 
     const cases = {
       findOne: jest.fn().mockResolvedValue(clinicalCase),
+      // `assertCaseActive`: the case exists and was not annulled.
+      manager: { query: jest.fn().mockResolvedValue([{ anulado_en: null, codigo_caso: 'ACN-1' }]) },
     } as unknown as Repository<ClinicalCase>;
 
     const images = {

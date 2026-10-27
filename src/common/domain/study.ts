@@ -145,6 +145,47 @@ export const CASE_STATUS_ORDER: Readonly<Record<CaseStatus, number>> = {
  */
 export const FINAL_CASE_STATUSES: readonly CaseStatus[] = ['cerrado', 'derivar_presencial'];
 
+/**
+ * Las etapas que ve el personal: tres, no siete.
+ *
+ * Decisión del equipo (25/10/2026): en la bandeja y en la ficha un caso está en **Borrador** (el
+ * ingreso no terminó), **En revisión** (esperando al especialista) o **Revisado** (el especialista
+ * firmó el diagnóstico). Los estados internos se conservan —las transiciones, los anexos y la
+ * auditoría los necesitan, y «Solicitar fotos» o «Derivar a presencial» siguen siendo acciones con
+ * su propio aviso en la ficha—, pero se muestran agrupados:
+ *
+ *  - «Fotos pendientes» es un caso que vuelve al mostrador y todavía espera revisión → En revisión.
+ *  - «Procesado por IA» es un caso analizado y sin firmar → En revisión.
+ *  - «Derivado a presencial» y «Cerrado» son casos que el especialista ya resolvió → Revisado.
+ */
+export const CASE_STAGES = ['borrador', 'en_revision', 'revisado'] as const;
+export type CaseStage = (typeof CASE_STAGES)[number];
+
+export const CASE_STAGE_LABELS: Readonly<Record<CaseStage, string>> = {
+  borrador: 'Borrador',
+  en_revision: 'En revisión',
+  revisado: 'Revisado',
+};
+
+export const CASE_STAGE_OF: Readonly<Record<CaseStatus, CaseStage>> = {
+  borrador: 'borrador',
+  en_revision: 'en_revision',
+  procesado_ia: 'en_revision',
+  solicitar_fotos: 'en_revision',
+  diagnosticado: 'revisado',
+  derivar_presencial: 'revisado',
+  cerrado: 'revisado',
+};
+
+export function isCaseStage(value: unknown): value is CaseStage {
+  return typeof value === 'string' && (CASE_STAGES as readonly string[]).includes(value);
+}
+
+/** The internal statuses a stage groups, for filtering the tray by what people see. */
+export function statusesOfStage(stage: CaseStage): CaseStatus[] {
+  return CASE_STATUSES.filter((status) => CASE_STAGE_OF[status] === stage);
+}
+
 /** Estados desde los que el caso sigue esperando trabajo del mostrador, no del especialista. */
 export const INTAKE_PENDING_STATUSES: readonly CaseStatus[] = ['borrador', 'solicitar_fotos'];
 

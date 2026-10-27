@@ -35,7 +35,8 @@ export const SHOT_DEFINITIONS: readonly ShotDefinition[] = [
   {
     key: 'general',
     label: 'Vista general',
-    instruction: 'Rostro completo de frente, con luz natural y sin maquillaje.',
+    instruction:
+      'Rostro completo de frente, con los ojos abiertos y dentro de la foto, con luz natural y sin maquillaje.',
     required: true,
   },
   {

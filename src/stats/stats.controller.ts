@@ -15,7 +15,13 @@ import type { Response } from 'express';
 
 import { AuditService } from 'src/audit/audit.service';
 import { CurrentUser, Roles } from 'src/common/decorators';
-import { ANALYSIS_ROLES, CONTRAST_ROLES, HYPOTHESES, RAW_EXPORT_ROLES, type HypothesisKey } from 'src/common/domain';
+import {
+  ANALYSIS_ROLES,
+  CONTRAST_ROLES,
+  HYPOTHESES,
+  RAW_EXPORT_ROLES,
+  type HypothesisKey,
+} from 'src/common/domain';
 import type {
   AuthenticatedRequest,
   AuthenticatedUser,
@@ -109,8 +115,12 @@ export class StatsController {
   @Get('hypothesis/history')
   @Roles(...ANALYSIS_ROLES)
   @ApiQuery({ name: 'hypothesis', required: false, enum: HYPOTHESES })
-  @ApiOperation({ summary: 'Historial inmutable de contrastes ejecutados (RNF-05).' })
-  async history(@Query('hypothesis') hypothesis?: HypothesisKey): Promise<HypothesisTestResultDto[]> {
+  @ApiOperation({
+    summary: 'Historial inmutable de contrastes ejecutados (RNF-05).',
+  })
+  async history(
+    @Query('hypothesis') hypothesis?: HypothesisKey,
+  ): Promise<HypothesisTestResultDto[]> {
     return this.statsService.history(hypothesis);
   }
 
@@ -122,7 +132,14 @@ export class StatsController {
     name: 'mode',
     required: false,
     enum: EXPORT_MODES,
-    description: 'Solo tiempos, diagnosticos, jornadas y encuestas. Sin valor, entrega ambas condiciones.',
+    description:
+      'Solo tiempos, diagnosticos, jornadas y encuestas. Sin valor, entrega ambas condiciones.',
+  })
+  @ApiQuery({
+    name: 'format',
+    required: false,
+    enum: ['csv', 'xlsx'],
+    description: 'xlsx solo para tiempos: la ficha del Anexo 4 con t₀ y t₁ en hora de Lima.',
   })
   @ApiOperation({
     summary: 'Descarga en CSV las mediciones del estudio (solo admin, RF-TR-02).',
@@ -137,10 +154,13 @@ export class StatsController {
     @Query('dataset') dataset?: DatasetName,
     @Query('includeSynthetic') includeSynthetic?: string,
     @Query('mode') mode?: string,
+    @Query('format') format?: string,
   ): Promise<void> {
     const name = dataset ?? 'mediciones';
     if (mode !== undefined && mode !== '' && !EXPORT_MODES.includes(mode as ExportMode)) {
-      throw new BadRequestException(`«${mode}» no es una condición. Use: ${EXPORT_MODES.join(', ')}.`);
+      throw new BadRequestException(
+        `«${mode}» no es una condición. Use: ${EXPORT_MODES.join(', ')}.`,
+      );
     }
     const exportMode = mode === undefined || mode === '' ? null : (mode as ExportMode);
     // Un nombre desconocido dejaba a `queryFor` sin rama que devolver y el driver recibia una
@@ -150,24 +170,49 @@ export class StatsController {
         `«${name}» no es un dataset del estudio. Disponibles: ${DATASET_NAMES.join(', ')}.`,
       );
     }
-    const csv = await this.datasetExport.export(name, includeSynthetic === 'true', exportMode);
+    const asWorkbook = format === 'xlsx';
+    if (format !== undefined && format !== '' && format !== 'csv' && !asWorkbook) {
+      throw new BadRequestException(`«${format}» no es un formato. Use: csv, xlsx.`);
+    }
+    // El .xlsx reproduce la ficha del Anexo 4; los demás datasets no tienen un instrumento impreso.
+    if (asWorkbook && name !== 'tiempos') {
+      throw new BadRequestException(
+        'El formato xlsx solo está disponible para el dataset tiempos (Anexo 4).',
+      );
+    }
+
+    const synthetic = includeSynthetic === 'true';
+    const suffix = exportMode === null ? '' : `-${exportMode}`;
+    const stamp = new Date().toISOString().slice(0, 10);
+    const file = asWorkbook
+      ? {
+          body: await this.datasetExport.anexo4Workbook(synthetic, exportMode),
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          name: `anexo4-tiempos${suffix}-${stamp}.xlsx`,
+        }
+      : {
+          body: await this.datasetExport.export(name, synthetic, exportMode),
+          type: 'text/csv; charset=utf-8',
+          name: `dataset-${name}${suffix}-${stamp}.csv`,
+        };
 
     await this.auditService.record(
       user,
       {
         action: 'dataset.export',
         entityType: 'dataset',
-        metadata: { dataset: name, includeSynthetic: includeSynthetic === 'true', mode: exportMode },
+        metadata: {
+          dataset: name,
+          includeSynthetic: synthetic,
+          mode: exportMode,
+          format: asWorkbook ? 'xlsx' : 'csv',
+        },
       },
       request,
     );
 
-    const stamp = new Date().toISOString().slice(0, 10);
-    response.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    response.setHeader(
-      'Content-Disposition',
-      `attachment; filename="dataset-${name}${exportMode === null ? '' : `-${exportMode}`}-${stamp}.csv"`,
-    );
-    response.send(csv);
+    response.setHeader('Content-Type', file.type);
+    response.setHeader('Content-Disposition', `attachment; filename="${file.name}"`);
+    response.send(file.body);
   }
 }

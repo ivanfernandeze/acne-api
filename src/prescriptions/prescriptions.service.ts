@@ -2,6 +2,7 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
 import { DataSource, Repository } from 'typeorm';
+import { assertCaseActive } from 'src/cases/case-guards';
 
 import { ClinicalCase } from 'src/cases/case.entity';
 import { EncryptionService } from 'src/common/crypto/encryption.service';
@@ -61,6 +62,7 @@ export class PrescriptionsService {
   ) {}
 
   async create(dto: CreatePrescriptionDto, user: AuthenticatedUser): Promise<PrescriptionDto> {
+    await assertCaseActive(this.dataSource.manager, dto.caseId);
     const items = dto.items ?? [];
     if (items.length === 0) {
       throw new BadRequestException('Una receta necesita al menos un medicamento.');

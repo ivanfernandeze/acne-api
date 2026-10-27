@@ -4,6 +4,8 @@ import { DataSource } from 'typeorm';
 
 import { ANAMNESIS_QUESTIONS, type AnamnesisAnswer } from 'src/common/domain';
 
+import { buildAnexo4Workbook, type Anexo4TimingRow } from './anexo4-workbook';
+
 /**
  * CSV export of the study measurements.
  *
@@ -15,12 +17,7 @@ import { ANAMNESIS_QUESTIONS, type AnamnesisAnswer } from 'src/common/domain';
  * `es_sintetico` column makes it impossible to mistake them for real evidence.
  */
 export type DatasetName =
-  | 'mediciones'
-  | 'tiempos'
-  | 'diagnosticos'
-  | 'jornadas'
-  | 'encuestas'
-  | 'anamnesis';
+  'mediciones' | 'tiempos' | 'diagnosticos' | 'jornadas' | 'encuestas' | 'anamnesis';
 
 export const DATASET_NAMES: readonly DatasetName[] = [
   'mediciones',
@@ -63,6 +60,32 @@ export class DatasetExportService {
     return this.toCsv(dataset === 'anamnesis' ? rows.map(flattenAnamnesis) : rows);
   }
 
+  /** Anexo 4 (OE1) en .xlsx con el formato de la ficha: t₀ y t₁ en hora de Lima, fuente e ID. */
+  async anexo4Workbook(includeSynthetic: boolean, mode: ExportMode | null): Promise<Buffer> {
+    const rows = await this.dataSource.query<Anexo4TimingRow[]>(
+      `
+      SELECT t."id",
+             c."codigo_caso"          AS "caso",
+             p."codigo_paciente"      AS "paciente",
+             t."modo_estudio_codigo"  AS "modo",
+             t."t0",
+             t."t1",
+             t."duracion_segundos"    AS "duracion_seg",
+             t."valido"               AS "valida",
+             t."origen_codigo"        AS "origen",
+             c."es_sintetico"         AS "es_sintetico"
+        FROM "cronometrajes_revision" t
+        JOIN "casos" c ON c."id" = t."caso_id"
+        JOIN "pacientes" p ON p."id" = c."paciente_id"
+       WHERE ($1::boolean OR c."es_sintetico" = false)
+         AND c."anulado_en" IS NULL
+         AND ($2::text IS NULL OR t."modo_estudio_codigo" = $2)
+       ORDER BY t."t0" ASC, c."codigo_caso" ASC`,
+      [includeSynthetic, mode],
+    );
+    return buildAnexo4Workbook(rows, mode);
+  }
+
   private queryFor(dataset: DatasetName): string {
     switch (dataset) {
       /**
@@ -96,6 +119,7 @@ export class DatasetExportService {
                   ORDER BY i."creado_en" DESC LIMIT 1
             ) ai ON true
            WHERE ($1::boolean OR c."es_sintetico" = false)
+             AND c."anulado_en" IS NULL
            ORDER BY c."codigo_caso" ASC`;
 
       case 'tiempos':
@@ -113,6 +137,7 @@ export class DatasetExportService {
             JOIN "casos" c ON c."id" = t."caso_id"
             JOIN "usuarios" u ON u."id" = t."usuario_id"
            WHERE ($1::boolean OR c."es_sintetico" = false)
+             AND c."anulado_en" IS NULL
              AND ($2::text IS NULL OR t."modo_estudio_codigo" = $2)
            ORDER BY t."t0" ASC`;
 
@@ -135,6 +160,7 @@ export class DatasetExportService {
             JOIN "casos" c ON c."id" = d."caso_id"
             JOIN "usuarios" u ON u."id" = d."usuario_id"
            WHERE ($1::boolean OR c."es_sintetico" = false)
+             AND c."anulado_en" IS NULL
              AND ($2::text IS NULL OR d."modo_estudio_codigo" = $2)
            ORDER BY d."creado_en" ASC`;
 
@@ -221,6 +247,7 @@ export class DatasetExportService {
             JOIN "casos" c ON c."id" = a."caso_id"
             JOIN "pacientes" p ON p."id" = c."paciente_id"
            WHERE ($1::boolean OR c."es_sintetico" = false)
+             AND c."anulado_en" IS NULL
            ORDER BY c."creado_en" ASC`;
     }
   }

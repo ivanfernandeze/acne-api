@@ -5,6 +5,65 @@ versionado con [SemVer](https://semver.org/lang/es/).
 
 ## [No publicado]
 
+> **Tras actualizar, ejecute `pnpm migration:run`**: añade `InstruccionVistaGeneral1758700000000`,
+> `AnulacionCasos1758800000000` y `EstadoDiagnosticados1758900000000`.
+
+### Added — ficha del Anexo 4 (OE1) en Excel (26/10/2026)
+
+- `GET /stats/dataset-export?dataset=tiempos&format=xlsx` entrega la ficha de registro del tiempo de
+  revisión como `.xlsx` (`stats/anexo4-workbook.ts`, dependencia `exceljs`): N.º, fecha, código de
+  caso, hora de apertura (t₀), hora de firma (t₁), TR (min), fuente, ID de cronometraje y
+  observación, con t₀ y t₁ en hora de Lima. Encabezado del instrumento, datos del registro, resumen
+  (n, válidos, TRM, DE, mínimo, máximo), nota y firmas; blanco y negro, A4 horizontal. Respeta
+  `mode` e `includeSynthetic`; `format=xlsx` con otro dataset responde 400. El CSV no cambia.
+- La ficha incluye la columna **Paciente** (código PAC), «Datos incluidos» refleja si la ficha trae
+  sintéticos (no el estado de la casilla), y la fuente y la nota salen de `origen_codigo`: las filas
+  `importada`/`transcrita` se declaran como cronometraje manual, no como sellado por el servidor.
+- `importar-tiempos.ts` marca `origen_codigo = 'importada'` en las filas que reemplaza.
+- El TR de la ficha sale de t₁ − t₀ y no de `duracion_segundos` (entero): 12 de los 31 casos del
+  19/10 se leían una centésima distinta de la ficha en papel (5,64 → 5,63). Nueva columna
+  «TR (min:s)» para que la resta de horas se pueda comprobar a la vista.
+
+### Fixed — un caso diagnosticado ya no vuelve a «En revisión» (25/10/2026)
+
+- `POST /cases/:id/open` escribía `en_revision` sin mirar el estado, y el portal vuelve a abrir la
+  ficha después de firmar el diagnóstico: todos los casos diagnosticados (31 de 31) se veían «En
+  revisión». Ahora solo un `borrador` pasa a revisión al abrirse. La migración
+  `EstadoDiagnosticados1758900000000` devuelve a `diagnosticado` los casos con diagnóstico del
+  sistema (postest) que habían quedado mal.
+
+### Changed — tres etapas visibles: Borrador, En revisión, Revisado (25/10/2026)
+
+- `CASE_STAGES` / `CASE_STAGE_OF` (`common/domain/study.ts`) agrupan los siete estados internos:
+  `procesado_ia` y `solicitar_fotos` se ven «En revisión»; `diagnosticado`, `derivar_presencial` y
+  `cerrado`, «Revisado». Los estados internos no cambian (transiciones, anexos, auditoría).
+- Los resúmenes traen `stage`; `GET /cases?stage=` filtra por etapa; `GET /meta/catalogs` sirve
+  `caseStages {values, labels, ofStatus}`.
+
+### Added — editar, eliminar o anular un caso, para los tres roles (25/10/2026)
+
+- **`POST /cases/:id/remove`** `{reason}` (mínimo 10 caracteres), para admin, dermatólogo y técnico.
+  Si el caso aún no tiene **evidencia del estudio** (diagnóstico, cronometraje de revisión, inferencia
+  o receta) se **borra** con sus fotos (también los bytes cifrados del almacenamiento), su anamnesis
+  y sus sesiones de captura. Si ya la tiene se **anula**: columnas `anulado_en`, `anulado_por` y
+  `motivo_anulacion` en `casos`; corta los QR vivos y descuenta el caso de la jornada en la que contó
+  para TCAD. Es un `POST` y no un `DELETE` por la regla de `no-hard-delete.spec.ts`: lo que tiene
+  evidencia recibe una lápida, como `POST /patients/:id/withdraw`. Auditoría: `case.delete` o
+  `case.void`, con el motivo y la evidencia. Regla en `common/domain/case-removal.ts`.
+- **Un caso anulado sale de todo lo que mide el estudio**: bandeja (`GET /cases`), indicadores
+  (TRM, TPD, pares de los contrastes), Anexos 4 y 5, las seis exportaciones, el historial y el
+  resumen por paciente, y el precargado de anamnesis de visitas anteriores. Y **no admite cambios**:
+  `assertCaseActive` (`src/cases/case-guards.ts`) lo rechaza al subir o reetiquetar fotos, guardar
+  la anamnesis, pedir el análisis, diagnosticar, recetar o emitir un QR; `findActiveEntity` al
+  abrir, cerrar, devolver, reenviar o derivar.
+- **`PATCH /cases/:id` para los tres roles**: paciente (`patientId`; se rechaza si el caso ya tiene
+  diagnóstico o receta, o si el paciente retiró su consentimiento), profesional asignado (cuenta
+  activa) y notas. El patrón de consenso sigue reservado a quien diagnostica y al administrador (403).
+- `GET /cases/assignees`: cuentas activas a las que se puede asignar un caso.
+- `GET /cases/:id` trae `removal {mode: eliminar|anular, evidence[]}`; los resúmenes, `notes`,
+  `voidedAt` y `voidReason`.
+- Se añadió la etiqueta de auditoría de `diagnosis.correct`, que faltaba (fallaba `audit.spec.ts`).
+
 > **Tras actualizar, ejecute `pnpm migration:run`**: esta tanda añade dos migraciones
 > (`SegundaOpinion1758400000000` y `OrigenVeredicto1758500000000`) y la API no las aplica sola fuera
 > de Docker (`RUN_MIGRATIONS=true`).

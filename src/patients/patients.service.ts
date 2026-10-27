@@ -293,11 +293,12 @@ export class PatientsService {
               (SELECT d."clase_iga_codigo"
                  FROM "diagnosticos" d
                  JOIN "casos" c2 ON c2."id" = d."caso_id"
-                WHERE c2."paciente_id" = c."paciente_id"
+                WHERE c2."paciente_id" = c."paciente_id" AND c2."anulado_en" IS NULL
                 ORDER BY d."creado_en" DESC
                 LIMIT 1)            AS "lastSeverity"
          FROM "casos" c
         WHERE ($1::boolean OR c."es_sintetico" = false)
+          AND c."anulado_en" IS NULL
         GROUP BY c."paciente_id"`,
       [includeSynthetic],
     );

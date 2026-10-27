@@ -124,6 +124,7 @@ export class ReviewTimingService {
 
     if (studyMode !== null) query.andWhere('timing.studyMode = :studyMode', { studyMode });
     if (!includeSynthetic) query.andWhere('c.isSynthetic = false');
+    query.andWhere('c.voidedAt IS NULL');
 
     const raw = await query.getRawMany<RawAnexo4Row>();
     return raw.map((row, index) => ({

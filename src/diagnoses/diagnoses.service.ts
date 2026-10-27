@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
+import { assertCaseActive } from 'src/cases/case-guards';
 
 import { ClinicalCase } from 'src/cases/case.entity';
 import { AnamnesisService } from 'src/anamnesis/anamnesis.service';
@@ -50,6 +51,7 @@ export class DiagnosesService {
   ): Promise<DiagnosisDto> {
     const clinicalCase = await this.cases.findOne({ where: { id: caseId } });
     if (clinicalCase === null) throw new NotFoundException(`No existe el caso ${caseId}.`);
+    await assertCaseActive(this.dataSource.manager, caseId);
     // A diagnosis on an incomplete photographic protocol is the measurement OE2 must not take:
     // the specialist would be grading a face seen from one side only.
     const missing = await this.images.missingRequiredShots(caseId);
@@ -199,6 +201,7 @@ export class DiagnosesService {
 
     if (studyMode !== null) query.andWhere('d.studyMode = :studyMode', { studyMode });
     if (!includeSynthetic) query.andWhere('c.isSynthetic = false');
+    query.andWhere('c.voidedAt IS NULL');
 
     const raw = await query.getRawMany<RawAnexo5Row>();
 

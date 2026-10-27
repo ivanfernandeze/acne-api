@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -10,12 +10,18 @@ import { matchesSearch } from 'src/common/utils/search-text';
 import { nextSequentialCode, withCodeRetry } from 'src/common/utils/sequential-code';
 import {
   AI_VIEWER_ROLES,
+  CASE_STAGE_OF,
   DIAGNOSING_ROLES,
   IDENTITY_ROLES,
   anamnesisImageMismatch,
   canTransition,
+  describeEvidence,
   describeMissingShots,
   missingRequiredShots,
+  removalMode,
+  type CaseEvidence,
+  statusesOfStage,
+  type CaseStage,
   type CaseStatus,
   type StudyMode,
   SYSTEM_MEASUREMENT_MODE,
@@ -29,7 +35,10 @@ import { ReviewTimingService } from 'src/study/review-timing.service';
 
 import { ClinicalCase } from './case.entity';
 import type {
+  CaseAssigneeDto,
   CaseDetailDto,
+  CaseRemovalDto,
+  CaseRemovalResultDto,
   CaseSummaryDto,
   CreateCaseDto,
   UpdateCaseDto,
@@ -39,6 +48,8 @@ export interface CaseFilters {
   /** Filters by the condition in which the case was registered (provenance). */
   studyMode?: StudyMode;
   status?: CaseStatus;
+  /** What the staff filters by: a stage groups several internal statuses. */
+  stage?: CaseStage;
   assignedUserId?: string;
   includeSynthetic?: boolean;
   /**
@@ -55,9 +66,13 @@ export interface CaseFilters {
   pendingForMode?: StudyMode;
 }
 
+const NO_EVIDENCE: CaseEvidence = { diagnoses: 0, reviewTimings: 0, inferences: 0, prescriptions: 0 };
+
 /** Covers: RF-TR-01, RF-TR-03 and the case lifecycle of section 9.2. */
 @Injectable()
 export class CasesService {
+  private readonly logger = new Logger(CasesService.name);
+
   constructor(
     @InjectRepository(ClinicalCase) private readonly repository: Repository<ClinicalCase>,
     private readonly imagesService: ImagesService,
@@ -121,10 +136,17 @@ export class CasesService {
       query.andWhere('c.studyMode = :studyMode', { studyMode: filters.studyMode });
     }
     if (filters.status !== undefined) query.andWhere('c.status = :status', { status: filters.status });
+    if (filters.stage !== undefined) {
+      query.andWhere('c.status IN (:...stageStatuses)', {
+        stageStatuses: statusesOfStage(filters.stage),
+      });
+    }
     if (filters.assignedUserId !== undefined) {
       query.andWhere('c.assignedUserId = :assignedUserId', { assignedUserId: filters.assignedUserId });
     }
     if (filters.includeSynthetic !== true) query.andWhere('c.isSynthetic = false');
+    // An annulled case is out of the study and out of every working list.
+    query.andWhere('c.voidedAt IS NULL');
     if (filters.pendingForMode !== undefined) {
       query.andWhere(
         `NOT EXISTS (
@@ -138,17 +160,20 @@ export class CasesService {
     if (filters.revealIdentity === true) query.addSelect('patient.encryptedFullName');
 
     const cases = await query.getMany();
-    const counts = await this.imageCounts(cases.map((c) => c.id));
+    const ids = cases.map((c) => c.id);
+    const [counts, evidence] = await Promise.all([this.imageCounts(ids), this.evidenceFor(ids)]);
 
-    const summaries = cases.map((c) =>
-      this.toSummary(
+    const summaries = cases.map((c) => ({
+      ...this.toSummary(
         c,
         counts.get(c.id) ?? 0,
         filters.revealIdentity === true
           ? this.encryption.decryptOptional(c.patient?.encryptedFullName)
           : null,
       ),
-    );
+      // The tray offers «Eliminar» or «Anular» per row, so it must know which one applies.
+      removal: this.toRemoval(evidence.get(c.id) ?? NO_EVIDENCE),
+    }));
 
     // Filtering happens after decryption because the name is ciphertext in the database and no
     // SQL predicate can reach it. Acceptable for a census of 30 cases; a production registry
@@ -176,6 +201,15 @@ export class CasesService {
 
     const found = await query.getOne();
     if (found === null) throw new NotFoundException(`No existe el caso ${id}.`);
+    return found;
+  }
+
+  /** `findEntity`, refusing a case that was annulled: it no longer admits any change. */
+  async findActiveEntity(id: string): Promise<ClinicalCase> {
+    const found = await this.findEntity(id);
+    if (found.voidedAt !== null) {
+      throw new BadRequestException(`El caso ${found.caseCode} está anulado y ya no admite cambios.`);
+    }
     return found;
   }
 
@@ -223,6 +257,7 @@ export class CasesService {
       suggested !== null
         ? anamnesisImageMismatch(suggested, await this.anamnesis.answersForCase(id))
         : [];
+    const removal = this.toRemoval(await this.evidence(id));
 
     return {
       ...this.toSummary(
@@ -252,6 +287,7 @@ export class CasesService {
       aiVisible,
       missingShots,
       anamnesisMismatch,
+      removal,
     };
   }
 
@@ -263,7 +299,7 @@ export class CasesService {
    * calls this exactly once, when the physician actually enters the review screen.
    */
   async open(id: string, user: AuthenticatedUser): Promise<CaseDetailDto> {
-    await this.findEntity(id);
+    const clinicalCase = await this.findActiveEntity(id);
     // Photographs belong to intake. Once t₀ is stamped the measured window has begun, so any phone
     // still holding a QR for this case is cut off: an upload landing mid-review would add work to
     // the interval that OE1 reports as review time (RF-OE1-01).
@@ -271,12 +307,17 @@ export class CasesService {
     // The measurement belongs to the OBSERVER's condition. A case closed in pretest is reopened
     // for its postest pass; that second pass is a new observation, not a correction of the first.
     await this.reviewTiming.start(id, user.id, SYSTEM_MEASUREMENT_MODE);
-    await this.repository.update({ id }, { status: 'en_revision' });
+    // Only a draft ENTERS review here. Until 25/10/2026 this set `en_revision` unconditionally, and
+    // the portal re-opens the case file after every action — including signing the diagnosis — so
+    // every diagnosed case fell straight back to «En revisión» (31 of 31 in the study database).
+    if (clinicalCase.status === 'borrador') {
+      await this.repository.update({ id }, { status: 'en_revision' });
+    }
     return this.findOne(id, user);
   }
 
   async close(id: string): Promise<CaseSummaryDto> {
-    const clinicalCase = await this.findEntity(id);
+    const clinicalCase = await this.findActiveEntity(id);
     if (!canTransition(clinicalCase.status, 'cerrado')) {
       throw new BadRequestException(
         `No se puede cerrar un caso en estado "${clinicalCase.status}". Debe estar diagnosticado.`,
@@ -300,7 +341,7 @@ export class CasesService {
     reason: string,
     user: AuthenticatedUser,
   ): Promise<CaseDetailDto> {
-    const clinicalCase = await this.findEntity(id);
+    const clinicalCase = await this.findActiveEntity(id);
     if (!canTransition(clinicalCase.status, 'solicitar_fotos')) {
       throw new BadRequestException(
         `No se pueden pedir fotos de un caso en estado "${clinicalCase.status}".`,
@@ -336,7 +377,7 @@ export class CasesService {
    * instante en que empieza a trabajar de verdad.
    */
   async resubmit(id: string, user: AuthenticatedUser): Promise<CaseDetailDto> {
-    const clinicalCase = await this.findEntity(id);
+    const clinicalCase = await this.findActiveEntity(id);
     if (!canTransition(clinicalCase.status, 'en_revision')) {
       throw new BadRequestException(
         `Un caso en estado "${clinicalCase.status}" no está esperando fotos.`,
@@ -362,7 +403,7 @@ export class CasesService {
     reason: string,
     user: AuthenticatedUser,
   ): Promise<CaseDetailDto> {
-    const clinicalCase = await this.findEntity(id);
+    const clinicalCase = await this.findActiveEntity(id);
     if (!canTransition(clinicalCase.status, 'derivar_presencial')) {
       throw new BadRequestException(
         `No se puede derivar un caso en estado "${clinicalCase.status}".`,
@@ -386,13 +427,140 @@ export class CasesService {
     return this.findOne(id, user);
   }
 
+  /**
+   * Corrige el caso: paciente, profesional asignado, notas y —para quien puede— el patrón de
+   * consenso. Lo que el ingreso produjo (fotos, anamnesis) se corrige desde «Continuar ingreso».
+   *
+   * Cambiar de paciente se rechaza una vez que hay diagnóstico o receta: los dos se emitieron para
+   * el paciente anterior, y moverlos en silencio pondría la firma del especialista sobre otra
+   * persona. Lo que queda es anular el caso y abrir uno nuevo.
+   */
   async update(id: string, dto: UpdateCaseDto): Promise<CaseSummaryDto> {
-    const clinicalCase = await this.findEntity(id);
+    const clinicalCase = await this.findActiveEntity(id);
+    const manager = this.repository.manager;
+
+    if (dto.patientId !== undefined && dto.patientId !== clinicalCase.patientId) {
+      const [patient] = await manager.query<Array<{ retirado_en: Date | null }>>(
+        `SELECT "retirado_en" FROM "pacientes" WHERE "id" = $1`,
+        [dto.patientId],
+      );
+      if (patient === undefined) throw new NotFoundException(`No existe el paciente ${dto.patientId}.`);
+      if (patient.retirado_en !== null) {
+        throw new BadRequestException(
+          'Ese paciente retiró su consentimiento: no se le pueden asignar casos nuevos (RNF-07).',
+        );
+      }
+      const evidence = await this.evidence(id);
+      if (evidence.diagnoses > 0 || evidence.prescriptions > 0) {
+        throw new BadRequestException(
+          'El caso ya tiene diagnóstico o receta para el paciente actual; no se puede cambiar de ' +
+            'paciente. Anúlelo y abra un caso nuevo para el paciente correcto.',
+        );
+      }
+      clinicalCase.patientId = dto.patientId;
+      clinicalCase.patient = undefined;
+    }
+    if (dto.assignedUserId !== undefined && dto.assignedUserId !== clinicalCase.assignedUserId) {
+      const [assignee] = await manager.query<Array<{ activo: boolean }>>(
+        `SELECT "activo" FROM "usuarios" WHERE "id" = $1`,
+        [dto.assignedUserId],
+      );
+      if (assignee === undefined || !assignee.activo) {
+        throw new BadRequestException('El profesional elegido no existe o está desactivado.');
+      }
+      clinicalCase.assignedUserId = dto.assignedUserId;
+      clinicalCase.assignedUser = undefined;
+    }
     if (dto.groundTruthIga !== undefined) clinicalCase.groundTruthIga = dto.groundTruthIga;
-    if (dto.assignedUserId !== undefined) clinicalCase.assignedUserId = dto.assignedUserId;
-    if (dto.notes !== undefined) clinicalCase.notes = dto.notes;
+    if (dto.notes !== undefined) clinicalCase.notes = dto.notes.trim() === '' ? null : dto.notes;
     await this.repository.save(clinicalCase);
     return this.toSummary(await this.findEntity(id));
+  }
+
+  /** Who a case can be assigned to: every active account, by name. */
+  async assignees(): Promise<CaseAssigneeDto[]> {
+    return this.repository.manager.query<CaseAssigneeDto[]>(
+      `SELECT "id", "nombre_completo" AS "fullName", "rol_codigo" AS "role"
+         FROM "usuarios"
+        WHERE "activo" = true
+        ORDER BY "nombre_completo" ASC`,
+    );
+  }
+
+  /** What the case already produced for the study. Any of it turns a removal into an annulment. */
+  async evidence(id: string): Promise<CaseEvidence> {
+    return (await this.evidenceFor([id])).get(id) ?? NO_EVIDENCE;
+  }
+
+  /** `evidence` for many cases in one query: the tray needs it for every row. */
+  private async evidenceFor(ids: string[]): Promise<Map<string, CaseEvidence>> {
+    if (ids.length === 0) return new Map();
+    const rows = await this.repository.manager.query<
+      Array<{
+        id: string;
+        diagnoses: number;
+        timings: number;
+        inferences: number;
+        prescriptions: number;
+      }>
+    >(
+      `SELECT x."id",
+              (SELECT COUNT(*)::int FROM "diagnosticos" WHERE "caso_id" = x."id") AS "diagnoses",
+              (SELECT COUNT(*)::int FROM "cronometrajes_revision" WHERE "caso_id" = x."id") AS "timings",
+              (SELECT COUNT(*)::int FROM "inferencias_ia" WHERE "caso_id" = x."id") AS "inferences",
+              (SELECT COUNT(*)::int FROM "recetas" WHERE "caso_id" = x."id") AS "prescriptions"
+         FROM unnest($1::uuid[]) AS x("id")`,
+      [ids],
+    );
+    return new Map(
+      rows.map((row) => [
+        row.id,
+        {
+          diagnoses: row.diagnoses,
+          reviewTimings: row.timings,
+          inferences: row.inferences,
+          prescriptions: row.prescriptions,
+        },
+      ]),
+    );
+  }
+
+  /**
+   * Quita el caso: lo BORRA si aún no produjo evidencia del estudio y lo ANULA si ya la produjo (ver
+   * `common/domain/case-removal.ts`).
+   *
+   * Borrar se lleva todo lo que cuelga del caso (fotos, anamnesis, sesiones de captura) por las
+   * claves foráneas en cascada, y después los bytes cifrados del almacenamiento: la fila primero,
+   * como en `ImagesService.remove`, porque un objeto huérfano es basura y una fila sin bytes es una
+   * imagen rota. Anular no toca nada de eso: corta los QR vivos, descuenta el caso de la jornada en
+   * la que contó para TCAD y sella quién, cuándo y por qué.
+   */
+  async remove(id: string, reason: string, user: AuthenticatedUser): Promise<CaseRemovalResultDto> {
+    const clinicalCase = await this.findActiveEntity(id);
+    const evidence = await this.evidence(id);
+    const removal = this.toRemoval(evidence);
+
+    if (removal.mode === 'eliminar') {
+      const keys = (await this.imagesService.findByCase(id, true)).map((image) => image.storageKey);
+      await this.repository.delete({ id });
+      await this.imagesService.purgeStoredBytes(keys);
+      return { ...removal, caseCode: clinicalCase.caseCode };
+    }
+
+    await this.captureService.revokeActiveForCase(id);
+    if (clinicalCase.workSessionId !== null) {
+      await this.sessions.uncountCase(clinicalCase.workSessionId);
+    }
+    await this.repository.update(
+      { id },
+      { voidedAt: new Date(), voidedById: user.id, voidReason: reason.trim() },
+    );
+    this.logger.log(`Caso ${clinicalCase.caseCode} anulado: ${removal.evidence.join(', ')}.`);
+    return { ...removal, caseCode: clinicalCase.caseCode };
+  }
+
+  private toRemoval(evidence: CaseEvidence): CaseRemovalDto {
+    return { mode: removalMode(evidence), evidence: describeEvidence(evidence) };
   }
 
   /** Marks the case as processed by the AI once an inference lands. */
@@ -418,12 +586,17 @@ export class CasesService {
       assignedUserName: clinicalCase.assignedUser?.fullName ?? null,
       studyMode: clinicalCase.studyMode,
       status: clinicalCase.status,
+      stage: CASE_STAGE_OF[clinicalCase.status],
       groundTruthIga: clinicalCase.groundTruthIga,
       returnReason: clinicalCase.returnReason,
       isSynthetic: clinicalCase.isSynthetic,
       imageCount,
       createdAt: clinicalCase.createdAt.toISOString(),
       closedAt: clinicalCase.closedAt?.toISOString() ?? null,
+      notes: clinicalCase.notes,
+      voidedAt: clinicalCase.voidedAt?.toISOString() ?? null,
+      voidReason: clinicalCase.voidReason,
+      removal: null,
     };
   }
 

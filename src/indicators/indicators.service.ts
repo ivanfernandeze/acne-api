@@ -64,6 +64,7 @@ export class IndicatorsService {
           AND t."valido" = true
           AND t."duracion_segundos" IS NOT NULL
           AND ($2::boolean OR c."es_sintetico" = false)
+          AND c."anulado_en" IS NULL
           AND ($3::uuid[] IS NULL OR t."usuario_id" = ANY($3::uuid[]))
         ORDER BY t."caso_id" ASC`,
       [mode, options.includeSynthetic ?? false, options.userIds ?? null],
@@ -114,6 +115,7 @@ export class IndicatorsService {
           AND c."clase_iga_referencia" IS NOT NULL
           AND ${predictedExpression} IS NOT NULL
           AND ($2::boolean OR c."es_sintetico" = false)
+          AND c."anulado_en" IS NULL
           AND ($3::uuid[] IS NULL OR d."usuario_id" = ANY($3::uuid[]))
         ORDER BY c."codigo_caso" ASC`,
       [mode, options.includeSynthetic ?? false, options.userIds ?? null],
@@ -262,6 +264,7 @@ export class IndicatorsService {
            ON post."caso_id" = c."id" AND post."modo_estudio_codigo" = 'postest'
           AND post."valido" = true AND post."duracion_segundos" IS NOT NULL
         WHERE ($1::boolean OR c."es_sintetico" = false)
+          AND c."anulado_en" IS NULL
         ORDER BY c."codigo_caso" ASC`,
       [options.includeSynthetic ?? false],
     );
@@ -300,6 +303,7 @@ export class IndicatorsService {
          ) ai ON true
         WHERE c."clase_iga_referencia" IS NOT NULL
           AND ($1::boolean OR c."es_sintetico" = false)
+          AND c."anulado_en" IS NULL
         ORDER BY c."codigo_caso" ASC`,
       [options.includeSynthetic ?? false],
     );

@@ -16,6 +16,8 @@ const SUBJECT_MESSAGES: Readonly<Record<string, string>> = {
   piel_no_facial:
     'La fotografía muestra piel que no es del rostro. Este registro solo admite fotografías faciales.',
   otro: 'La imagen no es la fotografía de un rostro. Tome la foto directamente a la cara del paciente.',
+  // A face IS there, but the photograph cannot be used: a second person, blur, darkness, too small.
+  rostro_humano: 'La fotografía no sirve para evaluar el rostro.',
 };
 
 const ISSUE_MESSAGES: Readonly<Record<string, string>> = {

@@ -4,27 +4,33 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
   UnauthorizedException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'node:crypto';
 import { Repository } from 'typeorm';
+import { assertCaseActive } from 'src/cases/case-guards';
 
 import { EncryptionService } from 'src/common/crypto/encryption.service';
 import { APP_CONFIG, type AppConfig } from 'src/config/configuration';
 import { SignedUrlService } from 'src/common/crypto/signed-url.service';
 import {
+  checkSameSubject,
   checkShotView,
   isHeadPose,
+  isShotKey,
   missingRequiredShots,
+  takesPartInIdentity,
   type HeadPose,
+  type IdentityReading,
   type ShotKey,
   type ShotSibling,
 } from 'src/common/domain';
 import { readImageDimensions } from 'src/common/utils/image-dimensions';
 import { sniffImageType, type SniffedImageType } from 'src/common/utils/image-sniffer';
-import { AiEngineClient } from 'src/inference/ai-engine.client';
+import { AiEngineClient, type ScreenReference } from 'src/inference/ai-engine.client';
 import { STORAGE_PROVIDER, type StorageProvider } from 'src/storage/storage.provider';
 
 import { describeRejection, describeIssues } from './screening-message';
@@ -36,6 +42,17 @@ export type { CaseImageDto };
 
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
+
+/** The 503 text when the photograph could not be verified: it was NOT stored. */
+const UNVERIFIED_MESSAGE =
+  'No se pudo verificar la fotografía porque el servicio de análisis de imágenes no respondió. ' +
+  'No se guardó; vuelva a intentarlo en unos segundos.';
+
+interface Screening {
+  warnings: string[];
+  pose: HeadPose | null;
+  identity: IdentityReading | null;
+}
 
 export interface UploadedImage {
   buffer: Buffer;
@@ -74,17 +91,25 @@ export class ImagesService {
     userId: string | null,
     shotKey: ShotKey | null = null,
   ): Promise<{ image: CaseImage; warnings: string[] }> {
+    await assertCaseActive(this.repository.manager, caseId);
     // The recorded mime type is the sniffed one, not the declared one.
     const mimeType = this.validate(file);
-    const screening = await this.screen(file.buffer, mimeType);
+    const siblings = await this.siblings(caseId);
+    const screening = await this.screen(
+      file.buffer,
+      mimeType,
+      await this.references(siblings, shotKey),
+    );
 
     const view = checkShotView(
       shotKey,
       screening.pose,
       this.encryption.sha256(file.buffer),
-      await this.siblings(caseId),
+      siblings,
     );
     if (view.rejection !== null) throw new UnprocessableEntityException(view.rejection);
+    const subject = checkSameSubject(shotKey, screening.identity);
+    if (subject.rejection !== null) throw new UnprocessableEntityException(subject.rejection);
 
     const image = await this.store(
       caseId,
@@ -95,7 +120,37 @@ export class ImagesService {
       shotKey,
       screening.pose,
     );
-    return { image, warnings: [...screening.warnings, ...view.warnings] };
+    return {
+      image,
+      warnings: [...screening.warnings, ...view.warnings, ...subject.warnings],
+    };
+  }
+
+  /**
+   * The case's other facial shots, decrypted, for the same-subject comparison: the LAST photograph
+   * of each shot (the one that counts everywhere else), never the candidate's own shot, which it
+   * replaces. Nothing biometric is kept between requests, so they travel each time (Ley 29733).
+   */
+  private async references(
+    siblings: readonly ShotSibling[],
+    shotKey: ShotKey | null,
+  ): Promise<ScreenReference[]> {
+    if (!this.config.aiEngine.screenUploads || !takesPartInIdentity(shotKey)) return [];
+    const latest = new Map<ShotKey, string>();
+    for (const sibling of siblings) {
+      if (sibling.shotKey === null || sibling.shotKey === shotKey) continue;
+      if (takesPartInIdentity(sibling.shotKey)) latest.set(sibling.shotKey, sibling.id);
+    }
+    const references: ScreenReference[] = [];
+    for (const [key, id] of latest) {
+      const { data, mimeType } = await this.readPlaintext(id);
+      references.push({
+        label: key,
+        image_base64: data.toString('base64'),
+        mime_type: mimeType,
+      });
+    }
+    return references;
   }
 
   /** The case's photographs as `checkShotView` reads them, oldest first. */
@@ -126,38 +181,64 @@ export class ImagesService {
    * engine's verdict carries nothing clinical, so nothing about the disease leaks into the pretest
    * (RF-TR-01).
    *
-   * @returns quality warnings worth passing to the photographer (never blocking on their own), and
-   *   the head pose when the engine measured one — null otherwise, which skips the pose rules.
+   * FAILS CLOSED since 25/10/2026, by the research team's decision: an engine that is down, that
+   * answers `checked: false` or that could not compare identities makes the upload a 503, and
+   * nothing is stored. Until then it failed open, and a case could be filed with photographs
+   * nobody had verified — two different people among them. Switching screening off
+   * (`IMAGE_SCREENING_ENABLED=false`) is the only way to admit unverified images, and it is a
+   * deliberate operating mode, not an accident.
+   *
+   * @param references the case's other shots, compared with this one for the same-subject rule.
+   * @returns quality warnings worth passing to the photographer, the head pose, and the identity
+   *   reading — pose and identity are null only when screening is switched off.
    */
   private async screen(
     buffer: Buffer,
     mimeType: string,
-  ): Promise<{ warnings: string[]; pose: HeadPose | null }> {
-    const unchecked: { warnings: string[]; pose: HeadPose | null } = { warnings: [], pose: null };
-    if (!this.config.aiEngine.screenUploads) return unchecked;
+    references: ScreenReference[] = [],
+  ): Promise<Screening> {
+    if (!this.config.aiEngine.screenUploads) return { warnings: [], pose: null, identity: null };
+    let verdict;
     try {
-      const verdict = await this.aiEngine.screenImage(buffer.toString('base64'), mimeType);
-      if (!verdict.checked) return unchecked;
-      if (!verdict.acceptable) {
-        throw new UnprocessableEntityException(
-          describeRejection(verdict.subject, verdict.reason),
-        );
-      }
-      return {
-        warnings: describeIssues(verdict.issues),
-        pose: isHeadPose(verdict.pose) ? verdict.pose : null,
-      };
+      verdict = await this.aiEngine.screenImage(buffer.toString('base64'), mimeType, references);
     } catch (error: unknown) {
-      if (error instanceof UnprocessableEntityException) throw error;
-      // Failing open is deliberate: a clinician looks at every photograph anyway, and refusing a
-      // real patient's intake because the engine blinked is the worse of the two errors. The log
-      // is loud so that silence is never mistaken for a verification.
-      this.logger.warn(
-        'No se pudo cribar la imagen; se admite sin verificar: ' +
+      this.logger.error(
+        'No se pudo cribar la imagen; se rechaza la subida: ' +
           (error instanceof Error ? error.message : String(error)),
       );
-      return unchecked;
+      throw new ServiceUnavailableException(UNVERIFIED_MESSAGE);
     }
+    if (!verdict.checked) {
+      this.logger.error('El motor no cribó la imagen (checked: false); se rechaza la subida.');
+      throw new ServiceUnavailableException(UNVERIFIED_MESSAGE);
+    }
+    if (!verdict.acceptable) {
+      throw new UnprocessableEntityException(describeRejection(verdict.subject, verdict.reason));
+    }
+    if (!verdict.identity?.checked) {
+      this.logger.error(
+        'El motor no pudo comparar la identidad entre tomas; se rechaza la subida.',
+      );
+      throw new ServiceUnavailableException(UNVERIFIED_MESSAGE);
+    }
+    return {
+      warnings: describeIssues(verdict.issues),
+      pose: isHeadPose(verdict.pose) ? verdict.pose : null,
+      identity: {
+        faceFound: verdict.identity.face_found,
+        comparisons: verdict.identity.comparisons.flatMap((comparison) =>
+          isShotKey(comparison.label)
+            ? [
+                {
+                  shotKey: comparison.label,
+                  verdict: comparison.verdict,
+                  nearDuplicate: comparison.near_duplicate,
+                },
+              ]
+            : [],
+        ),
+      },
+    };
   }
 
   /** Persists a Grad-CAM overlay produced by the engine (section 8.4). */
@@ -216,20 +297,24 @@ export class ImagesService {
    *
    * Pasa por las mismas reglas de vista que la subida (`checkShotView`), con la orientación que se
    * midió al subirla: reetiquetar no puede ser la puerta de atrás para archivar un perfil como
-   * vista general.
+   * vista general. Y por la misma comprobación de identidad (`checkSameSubject`) contra las demás
+   * tomas: un acercamiento sin rostro comparable no puede pasar a ser un perfil sin verificar.
    */
   async relabel(imageId: string, shotKey: ShotKey): Promise<CaseImage> {
     const image = await this.findById(imageId);
     if (image.isHeatmap) {
       throw new BadRequestException('Un mapa de calor no es una toma del protocolo fotográfico.');
     }
-    const view = checkShotView(
-      shotKey,
-      image.pose,
-      image.sha256,
-      await this.siblings(image.caseId, image.id),
-    );
+    await assertCaseActive(this.repository.manager, image.caseId);
+    const siblings = await this.siblings(image.caseId, image.id);
+    const view = checkShotView(shotKey, image.pose, image.sha256, siblings);
     if (view.rejection !== null) throw new UnprocessableEntityException(view.rejection);
+    if (this.config.aiEngine.screenUploads && takesPartInIdentity(shotKey)) {
+      const { data, mimeType } = await this.readPlaintext(image.id);
+      const screening = await this.screen(data, mimeType, await this.references(siblings, shotKey));
+      const subject = checkSameSubject(shotKey, screening.identity);
+      if (subject.rejection !== null) throw new UnprocessableEntityException(subject.rejection);
+    }
     await this.repository.update({ id: imageId }, { shotKey });
     image.shotKey = shotKey;
     return image;
@@ -297,6 +382,24 @@ export class ImagesService {
       );
     }
     return { removed: true, caseId: image.caseId };
+  }
+
+  /**
+   * Borra del almacenamiento los bytes cifrados de fotografías cuyas filas ya no existen (el caso se
+   * borró y sus `imagenes_caso` se fueron en cascada). Un fallo no deshace nada: un objeto cifrado
+   * huérfano es basura, no un dato expuesto; queda en el log para limpiarlo.
+   */
+  async purgeStoredBytes(storageKeys: readonly string[]): Promise<void> {
+    for (const key of storageKeys) {
+      try {
+        await this.storage.remove(key);
+      } catch (error: unknown) {
+        this.logger.warn(
+          `No se pudieron borrar los bytes de ${key}: ` +
+            (error instanceof Error ? error.message : String(error)),
+        );
+      }
+    }
   }
 
   /**
